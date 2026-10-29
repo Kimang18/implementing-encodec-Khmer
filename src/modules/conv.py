@@ -1,15 +1,18 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import math
+
 import einops
+import torch
+import torch.nn.functional as F
+from torch import nn
 from torch.nn.utils.parametrizations import spectral_norm, weight_norm
 
-
 CONV_NORMALIZATIONS = [
-        'none', # no normalization
-        'weight_norm', 'spectral_norm', # weight parameterization normalization
-        'time_layer_norm', 'layer_norm', 'time_group_norm' # standard normalization
+    "none",  # no normalization
+    "weight_norm",
+    "spectral_norm",  # weight parameterization normalization
+    "time_layer_norm",
+    "layer_norm",
+    "time_group_norm",  # standard normalization
 ]
 
 
@@ -18,18 +21,18 @@ class ConvLayerNorm(nn.LayerNorm):
         super().__init__(normalized_shape, **kwargs)
 
     def forward(self, x):
-        x = einops.rearrange(x, 'b ... t -> b t ...')
+        x = einops.rearrange(x, "b ... t -> b t ...")
         x = super().forward(x)
-        x = einops.rearrange(x, 'b t ... -> b ... t')
+        x = einops.rearrange(x, "b t ... -> b ... t")
         return x
 
 
 def apply_parameterization_norm(module, norm_type):
     assert norm_type in CONV_NORMALIZATIONS
 
-    if norm_type == 'weight_norm':
+    if norm_type == "weight_norm":
         return weight_norm(module)
-    elif norm_type == 'spectral_norm':
+    elif norm_type == "spectral_norm":
         return spectral_norm(module)
     else:
         return module
@@ -38,21 +41,19 @@ def apply_parameterization_norm(module, norm_type):
 def get_norm_module(module, norm_type, **norm_kwargs):
     assert norm_type in CONV_NORMALIZATIONS
 
-    if norm_type == 'layer_norm':
+    if norm_type == "layer_norm":
         return ConvLayerNorm(module.out_channels, **norm_kwargs)
-    if norm_type == 'time_group_norm':
+    if norm_type == "time_group_norm":
         return nn.GroupNorm(1, module.out_channels, **norm_kwargs)
     else:
         return nn.Identity()
 
 
 class NormConv1d(nn.Module):
-    def __init__(self, *args, norm_type='none', norm_kwargs={}, **kwargs):
+    def __init__(self, *args, norm_type="none", norm_kwargs={}, **kwargs):
         super().__init__()
 
-        self.conv = apply_parameterization_norm(
-                nn.Conv1d(*args, **kwargs), norm_type
-        )
+        self.conv = apply_parameterization_norm(nn.Conv1d(*args, **kwargs), norm_type)
         self.norm = get_norm_module(self.conv, norm_type, **norm_kwargs)
 
     def forward(self, x):
@@ -60,11 +61,11 @@ class NormConv1d(nn.Module):
 
 
 class NormConvTranspose1d(nn.Module):
-    def __init__(self, *args, norm_type='none', norm_kwargs={}, **kwargs):
+    def __init__(self, *args, norm_type="none", norm_kwargs={}, **kwargs):
         super().__init__()
 
         self.convtr = apply_parameterization_norm(
-                nn.ConvTranspose1d(*args, **kwargs), norm_type
+            nn.ConvTranspose1d(*args, **kwargs), norm_type
         )
         self.norm = get_norm_module(self.convtr, norm_type, **norm_kwargs)
 
@@ -73,12 +74,10 @@ class NormConvTranspose1d(nn.Module):
 
 
 class NormConv2d(nn.Module):
-    def __init__(self, *args, norm_type='none', norm_kwargs={}, **kwargs):
+    def __init__(self, *args, norm_type="none", norm_kwargs={}, **kwargs):
         super().__init__()
 
-        self.conv = apply_parameterization_norm(
-                nn.Conv2d(*args, **kwargs), norm_type
-        )
+        self.conv = apply_parameterization_norm(nn.Conv2d(*args, **kwargs), norm_type)
         self.norm = get_norm_module(self.conv, norm_type, **norm_kwargs)
 
     def forward(self, x):
@@ -86,11 +85,11 @@ class NormConv2d(nn.Module):
 
 
 class NormConvTranspose2d(nn.Module):
-    def __init__(self, *args, norm_type='none', norm_kwargs={}, **kwargs):
+    def __init__(self, *args, norm_type="none", norm_kwargs={}, **kwargs):
         super().__init__()
 
         self.convtr = apply_parameterization_norm(
-                nn.ConvTranspose2d(*args, **kwargs), norm_type
+            nn.ConvTranspose2d(*args, **kwargs), norm_type
         )
         self.norm = get_norm_module(self.convtr, norm_type, **norm_kwargs)
 
@@ -138,17 +137,19 @@ def unpad1d(x, paddings):
 
 
 class SConv1d(nn.Module):
-    def __init__(self,
-                 in_channels,
-                 out_channels,
-                 kernel_size,
-                 stride=1,
-                 dilation=1,
-                 groups=1,
-                 bias=True,
-                 norm_type="none",
-                 norm_kwargs={},
-                 pad_mode="reflect"):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride=1,
+        dilation=1,
+        groups=1,
+        bias=True,
+        norm_type="none",
+        norm_kwargs={},
+        pad_mode="reflect",
+    ):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -162,10 +163,16 @@ class SConv1d(nn.Module):
         self.pad_mode = pad_mode
 
         self.conv = NormConv1d(
-                in_channels, out_channels, kernel_size, stride,
-                dilation=dilation, groups=groups, bias=bias,
-                norm_type=norm_type, norm_kwargs=norm_kwargs
-                )
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            dilation=dilation,
+            groups=groups,
+            bias=bias,
+            norm_type=norm_type,
+            norm_kwargs=norm_kwargs,
+        )
 
     def forward(self, x):
         _, _, t = x.shape  # batch, channel, time
@@ -175,7 +182,9 @@ class SConv1d(nn.Module):
 
         # want padding s.t. output = input / stride
         padding_total = kernel_size - self.stride
-        extra_padding = get_extra_padding_for_conv1d(t, kernel_size, self.stride, padding_total)
+        extra_padding = get_extra_padding_for_conv1d(
+            t, kernel_size, self.stride, padding_total
+        )
 
         padding_right = padding_total // 2
         padding_left = padding_total - padding_right
@@ -185,14 +194,16 @@ class SConv1d(nn.Module):
 
 
 class SConvTranspose1d(nn.Module):
-    def __init__(self,
-                 in_channels,
-                 out_channels,
-                 kernel_size,
-                 stride=1,
-                 norm_type="none",
-                 norm_kwargs={},
-                 pad_mode="reflect"):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride=1,
+        norm_type="none",
+        norm_kwargs={},
+        pad_mode="reflect",
+    ):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -201,9 +212,13 @@ class SConvTranspose1d(nn.Module):
         self.norm_type = norm_type
 
         self.convtr = NormConvTranspose1d(
-                in_channels, out_channels, kernel_size, stride,
-                norm_type=norm_type, norm_kwargs=norm_kwargs
-                )
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            norm_type=norm_type,
+            norm_kwargs=norm_kwargs,
+        )
 
     def forward(self, x):
         padding_total = self.kernel_size - self.stride
@@ -215,20 +230,17 @@ class SConvTranspose1d(nn.Module):
 
         return y
 
+
 if __name__ == "__main__":
-    sconv = SConv1d(in_channels=16,
-                    out_channels=32,
-                    kernel_size=11,
-                    stride=2)
+    sconv = SConv1d(in_channels=16, out_channels=32, kernel_size=11, stride=2)
 
     rand = torch.randn(4, 16, 100)
     print(rand.shape)
     conv_out = sconv(rand)
     print(conv_out.shape)
 
-    sconvtr = SConvTranspose1d(in_channels=32,
-                               out_channels=16,
-                               kernel_size=11,
-                               stride=2)
+    sconvtr = SConvTranspose1d(
+        in_channels=32, out_channels=16, kernel_size=11, stride=2
+    )
     convtr_out = sconvtr(conv_out)
     print(convtr_out.shape)

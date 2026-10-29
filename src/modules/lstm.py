@@ -1,18 +1,16 @@
-import torch.nn as nn
+from torch import nn
 
 
 class SLSTM(nn.Module):
-    def __init__(self,
-                 dimension,
-                 num_layers=2,
-                 bidirectional=True,
-                 skip=True):
+    def __init__(self, dimension, num_layers=2, bidirectional=True, skip=True):
         super().__init__()
-        self.lstm = nn.LSTM(dimension,
-                            dimension,
-                            num_layers=num_layers,
-                            bidirectional=bidirectional,
-                            batch_first=True)
+        self.lstm = nn.LSTM(
+            dimension,
+            dimension,
+            num_layers=num_layers,
+            bidirectional=bidirectional,
+            batch_first=True,
+        )
 
         if bidirectional:
             self.proj = nn.Linear(dimension * 2, dimension)
