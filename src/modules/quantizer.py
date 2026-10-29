@@ -1,10 +1,11 @@
-# import torch.distributed as dist
-import accelerate
 import einops
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
-from accelerate import Accelerator
 from torch import nn
+
+WORLD_SIZE = dist.get_world_size()
+IS_MAIN_PROCESS = dist.get_rank() == 0
 
 
 def ema_inplace(moving_average, new, decay):
@@ -71,7 +72,6 @@ class EuclideanCodebook(nn.Module):
         decay=0.99,
         eps=1e-5,
         threshold_ema_dead_code=2,
-        accelerator=None,
     ):
         super().__init__()
 
@@ -80,7 +80,6 @@ class EuclideanCodebook(nn.Module):
         self.kmeans_iters = kmeans_iters
         self.eps = eps
         self.threshold_ema_dead_code = threshold_ema_dead_code
-        self.accelerator = accelerator
 
         init_fn = uniform_init if not kmeans_init else torch.zeros
         embed = init_fn(codebook_size, dim)
@@ -91,16 +90,14 @@ class EuclideanCodebook(nn.Module):
         self.register_buffer("embed_sum", embed.clone())
 
     def _is_distributed(self):
-        return self.accelerator is not None and self.accelerator.num_processes > 1
-        # return dist.is_available() and dist.is_initialized()
+        return dist.is_available() and dist.is_initialized() and WORLD_SIZE > 1
 
     def _broadcast_buffers(self):
         if not self._is_distributed():
             return
 
         for buffer in self.buffers():
-            buffer.data = accelerate.utils.broadcast(buffer.data, from_process=0)
-            # dist.broadcast(buffer.data, src=0)
+            dist.broadcast(buffer.data, src=0)
 
     @torch.jit.ignore
     def init_embed_(self, data):
@@ -108,8 +105,14 @@ class EuclideanCodebook(nn.Module):
             return
 
         if self._is_distributed():
-            all_data = self.accelerator.gather(data)
-            if self.accelerator.is_main_process:
+            all_data = torch.empty(
+                WORLD_SIZE * data.shape[0],
+                *data.shape[1:],
+                dtype=data.dtype,
+                device=data.device,
+            )
+            dist.all_gather_into_tensor(all_data, data.contiguous())
+            if IS_MAIN_PROCESS:
                 embed, cluster_size = kmeans(
                     all_data, self.codebook_size, self.kmeans_iters
                 )
@@ -118,7 +121,7 @@ class EuclideanCodebook(nn.Module):
                 self.embed_sum.data.copy_(embed.clone())
                 self.cluster_size.data.copy_(cluster_size)
 
-            self.accelerator.wait_for_everyone()
+            dist.barrier()
 
             self._broadcast_buffers()
         else:
@@ -129,9 +132,7 @@ class EuclideanCodebook(nn.Module):
 
         self.inited.data.copy_(torch.Tensor([True]))
         if self._is_distributed():
-            self.inited.data = accelerate.utils.broadcast(
-                self.inited.data, from_process=0
-            )
+            dist.broadcast(self.inited.data, src=0)
 
     def replace_(self, samples, mask):
         modified_codebook = torch.where(
@@ -150,16 +151,14 @@ class EuclideanCodebook(nn.Module):
 
         batch_samples = einops.rearrange(batch_samples, "... d -> (...) d")
 
-        if not self._is_distributed() or self.accelerator.is_main_process:
+        if not self._is_distributed() or IS_MAIN_PROCESS:
             self.replace_(batch_samples, mask=expired_codes)
 
         if self._is_distributed():
-            self.accelerator.wait_for_everyone()
+            dist.barrier()
 
         if self._is_distributed():
-            self.embed.data = accelerate.utils.broadcast(
-                self.embed.data, from_process=0
-            )
+            dist.broadcast(self.embed.data, src=0)
 
     def preprocess(self, x):
         """flatten all but last dimension"""
@@ -213,7 +212,13 @@ class EuclideanCodebook(nn.Module):
 
         if self.training:
             if self._is_distributed():
-                batch_samples = self.accelerator.gather(x)
+                batch_samples = torch.empty(
+                    WORLD_SIZE * x.shape[0],
+                    *x.shape[1:],
+                    dtype=x.dtype,
+                    device=x.device,
+                )
+                dist.all_gather_into_tensor(batch_samples, x.contiguous())
             else:
                 batch_samples = x
 
@@ -224,16 +229,12 @@ class EuclideanCodebook(nn.Module):
             # (dim, n) @ (n, k) -> (dim, k)
             local_embed_sum = x.t() @ embed_onehot
 
+            global_cluster_count = local_cluster_count
+            global_embed_sum = local_embed_sum
+
             if self._is_distributed():
-                global_cluster_count = self.accelerator.reduce(
-                    local_cluster_count, reduction="sum"
-                )
-                global_embed_sum = self.accelerator.reduce(
-                    local_embed_sum, reduction="sum"
-                )
-            else:
-                global_cluster_count = local_cluster_count
-                global_embed_sum = local_embed_sum
+                dist.all_reduce(global_cluster_count, op=dist.ReduceOp.SUM)
+                dist.all_reduce(global_embed_sum, op=dist.ReduceOp.SUM)
 
             ema_inplace(self.cluster_size, global_cluster_count, self.decay)
             ema_inplace(self.embed_sum, global_embed_sum.t(), self.decay)
@@ -251,7 +252,8 @@ class EuclideanCodebook(nn.Module):
                 self._broadcast_buffers()
 
             if self._is_distributed():
-                self.accelerator.wait_for_everyone()
+                # wait for everyone
+                dist.barrier()
 
         return quantized, embed_ind
 
@@ -270,7 +272,6 @@ class VectorQuantization(nn.Module):
         kmeans_iters=50,
         threshold_ema_dead_code=2,
         commitment_weight=1,
-        accelerator=None,
     ):
         super().__init__()
 
@@ -279,7 +280,6 @@ class VectorQuantization(nn.Module):
         self.kmeans_iters = kmeans_iters
         self.eps = eps
         self.threshold_ema_dead_code = threshold_ema_dead_code
-        self.accelerator = accelerator
         self.commitment_weight = commitment_weight
 
         codebook_dim = codebook_dim if codebook_dim is not None else dim
@@ -300,7 +300,6 @@ class VectorQuantization(nn.Module):
             decay=decay,
             eps=eps,
             threshold_ema_dead_code=threshold_ema_dead_code,
-            accelerator=accelerator,
         )
 
     @torch.no_grad()
@@ -398,6 +397,8 @@ class ResidualVectorQuantization(nn.Module):
 
 
 def test_codebook():
+    from accelerate import Accelerator
+
     accelerator = Accelerator()
 
     # Test parameters
@@ -411,7 +412,6 @@ def test_codebook():
         dim=dim,
         codebook_size=codebook_size,
         kmeans_init=True,
-        accelerator=accelerator,
         threshold_ema_dead_code=10,
     )
 
