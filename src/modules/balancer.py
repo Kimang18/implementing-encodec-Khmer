@@ -1,5 +1,6 @@
-import torch
 from collections import defaultdict
+
+import torch
 
 
 def average_metrics_across_gpus(metrics, count=1, accelerator=None):
@@ -7,7 +8,9 @@ def average_metrics_across_gpus(metrics, count=1, accelerator=None):
         return metrics
     keys, values = zip(*metrics.items())
     # tensor = [v1, v2, ..., count]
-    tensor = torch.tensor(list(values) + [count], dtype=torch.float32, device=accelerator.device)
+    tensor = torch.tensor(
+        list(values) + [count], dtype=torch.float32, device=accelerator.device
+    )
 
     tensor = accelerator.reduce(tensor, reduction="sum")
 
@@ -31,12 +34,15 @@ def averager(beta=1.0, state=None):
             if value is not None:
                 total[key] = total[key] * beta + float(value)
                 fix[key] = fix[key] * beta + 1
-        return {key: (tot / fix[key] if tot is not None else None) for key, tot in total.items()}
+        return {
+            key: (tot / fix[key] if tot is not None else None)
+            for key, tot in total.items()
+        }
 
     def get_state():
         return {
-            'fix': dict(fix),
-            'total': dict(total),
+            "fix": dict(fix),
+            "total": dict(total),
         }
 
     def load_state(state):
@@ -50,14 +56,16 @@ def averager(beta=1.0, state=None):
 
 
 class Balancer:
-    def __init__(self,
-                 weights,
-                 total_norm=1,
-                 ema_decay=0.999,
-                 eps=1e-12,
-                 accelerator=None,
-                 max_scale=100,
-                 min_scale=0.01):
+    def __init__(
+        self,
+        weights,
+        total_norm=1,
+        ema_decay=0.999,
+        eps=1e-12,
+        accelerator=None,
+        max_scale=100,
+        min_scale=0.01,
+    ):
         self.weights = weights
         self.total_norm = total_norm
         self.eps = eps
@@ -71,8 +79,9 @@ class Balancer:
         grads = {}
 
         for name, loss in losses.items():
-
-            grad, *_ = torch.autograd.grad(loss, [input], retain_graph=True, allow_unused=True)
+            grad, *_ = torch.autograd.grad(
+                loss, [input], retain_graph=True, allow_unused=True
+            )
 
             if grad is not None:
                 dims = tuple(range(1, grad.dim()))
@@ -88,7 +97,9 @@ class Balancer:
                 norms[name] = None
                 grads[name] = None
 
-        avg_norms = average_metrics_across_gpus(self.averager(norms), count, self.accelerator)
+        avg_norms = average_metrics_across_gpus(
+            self.averager(norms), count, self.accelerator
+        )
 
         total_weights = sum([self.weights[k] for k in avg_norms.keys()])
         ratios = {k: w / total_weights for (k, w) in self.weights.items()}
@@ -106,9 +117,9 @@ class Balancer:
             input.backward(out_grad, retain_graph=retain_graph)
 
         else:
-            self.accelerator.backward(loss=input,
-                                      gradient=out_grad,
-                                      retain_graph=retain_graph)
+            self.accelerator.backward(
+                loss=input, gradient=out_grad, retain_graph=retain_graph
+            )
 
     def state_dict(self):
         """save the state dict"""
