@@ -2,11 +2,13 @@ import random
 from dataclasses import dataclass, field
 from typing import Any
 
-import accelerate
 import torch
+import torch.distributed as dist
 from quantizer import ResidualVectorQuantization
 from seanet import SEANetDecoder, SEANetEncoder
 from torch import nn
+
+WORLD_SIZE = dist.get_world_rank()
 
 
 @dataclass
@@ -45,12 +47,11 @@ class EnCodecConfig:
 
 
 class EncodecModel(nn.Module):
-    def __init__(self, config, accelerator=None):
+    def __init__(self, config):
         super().__init__()
 
         self.config = config
         self.n_quantizers = config.n_quantizers
-        self.accelerator = accelerator
 
         self.encoder = SEANetEncoder(
             channels=config.channels,
@@ -82,7 +83,6 @@ class EncodecModel(nn.Module):
             kmeans_iters=config.kmeans_iters,
             threshold_ema_dead_code=config.threshold_ema_dead_code,
             commitment_weight=config.commit_weight,
-            accelerator=accelerator,
         )
         self.decoder = SEANetDecoder(
             channels=config.channels,
@@ -108,7 +108,7 @@ class EncodecModel(nn.Module):
         )
 
     def _is_distributed(self):
-        return self.accelerator is not None and self.accelerator.num_processes > 1
+        return dist.is_available() and dist.is_initialized() and WORLD_SIZE > 1
 
     def normalize(self, x):
         batch_size, channels, seq_len = x.shape
@@ -136,9 +136,7 @@ class EncodecModel(nn.Module):
         )
 
         if self._is_distributed():
-            n_codebooks_to_use = accelerate.utils.broadcast(
-                n_codebooks_to_use, from_process=0
-            )
+            dist.broadcast(n_codebooks_to_use, src=0)
 
         quantize_out, _, out_losses = self.quantizer(encoded, n_codebooks_to_use)
 
