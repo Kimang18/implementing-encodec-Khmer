@@ -1,14 +1,15 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+# import torch.distributed as dist
 import accelerate
-from accelerate import Accelerator
 import einops
+import torch
+import torch.nn.functional as F
+from accelerate import Accelerator
+from torch import nn
 
 
 def ema_inplace(moving_average, new, decay):
     """moving_average=moving_average * gamma + (1-gamma)*new"""
-    moving_average.data.mul_(decay).add_(new, alpha=1-decay)
+    moving_average.data.mul_(decay).add_(new, alpha=1 - decay)
 
 
 def laplace_smoothing(x, n_categories, eps=1e-5):
@@ -28,7 +29,7 @@ def sample_vectors(samples, num):
     if n_samples > num:
         indices = torch.randperm(n_samples, device=device)[:num]
     else:
-        indices = torch.randint(0, n_samples, (num, ), device=device)
+        indices = torch.randint(0, n_samples, (num,), device=device)
     return samples[indices]
 
 
@@ -42,36 +43,36 @@ def kmeans(samples, n_clusters, n_iters):
         samples_, centroids_ = samples.unsqueeze(1), centroids.unsqueeze(0)
 
         diffs = samples_ - centroids_  # (n, k, dim)
-        dists = -1 * torch.sum(diffs ** 2, dim=-1)
+        dists = -1 * torch.sum(diffs**2, dim=-1)
         buckets = dists.max(dim=-1).indices  # (n,)
 
         bins = torch.bincount(buckets, minlength=n_clusters)
 
-        zero_mask = (bins == 0)
-        bins_min_clamped = bins.masked_fill_(
-            zero_mask, 1)  # avoid division by 0
+        zero_mask = bins == 0
+        bins_min_clamped = bins.masked_fill_(zero_mask, 1)  # avoid division by 0
 
         new_centroids = buckets.new_zeros(n_clusters, dim, dtype=dtype)
         repeated_buckets = buckets.unsqueeze(-1).repeat(1, dim)
         new_centroids.scatter_add_(dim=0, index=repeated_buckets, src=samples)
         new_centroids = new_centroids / bins_min_clamped.unsqueeze(-1)
 
-        centroids = torch.where(zero_mask.unsqueeze(-1),
-                                centroids, new_centroids)
+        centroids = torch.where(zero_mask.unsqueeze(-1), centroids, new_centroids)
 
     return centroids, bins
 
 
 class EuclideanCodebook(nn.Module):
-    def __init__(self,
-                 dim,
-                 codebook_size,
-                 kmeans_init=False,
-                 kmeans_iters=50,
-                 decay=0.99,
-                 eps=1e-5,
-                 threshold_ema_dead_code=2,
-                 accelerator=None):
+    def __init__(
+        self,
+        dim,
+        codebook_size,
+        kmeans_init=False,
+        kmeans_iters=50,
+        decay=0.99,
+        eps=1e-5,
+        threshold_ema_dead_code=2,
+        accelerator=None,
+    ):
         super().__init__()
 
         self.decay = decay
@@ -91,14 +92,15 @@ class EuclideanCodebook(nn.Module):
 
     def _is_distributed(self):
         return self.accelerator is not None and self.accelerator.num_processes > 1
+        # return dist.is_available() and dist.is_initialized()
 
     def _broadcast_buffers(self):
         if not self._is_distributed():
             return
 
         for buffer in self.buffers():
-            buffer.data = accelerate.utils.broadcast(
-                buffer.data, from_process=0)
+            buffer.data = accelerate.utils.broadcast(buffer.data, from_process=0)
+            # dist.broadcast(buffer.data, src=0)
 
     @torch.jit.ignore
     def init_embed_(self, data):
@@ -109,7 +111,8 @@ class EuclideanCodebook(nn.Module):
             all_data = self.accelerator.gather(data)
             if self.accelerator.is_main_process:
                 embed, cluster_size = kmeans(
-                    all_data, self.codebook_size, self.kmeans_iters)
+                    all_data, self.codebook_size, self.kmeans_iters
+                )
 
                 self.embed.data.copy_(embed)
                 self.embed_sum.data.copy_(embed.clone())
@@ -127,12 +130,12 @@ class EuclideanCodebook(nn.Module):
         self.inited.data.copy_(torch.Tensor([True]))
         if self._is_distributed():
             self.inited.data = accelerate.utils.broadcast(
-                self.inited.data, from_process=0)
+                self.inited.data, from_process=0
+            )
 
     def replace_(self, samples, mask):
         modified_codebook = torch.where(
-            mask.unsqueeze(-1), sample_vectors(samples,
-                                               self.codebook_size), self.embed
+            mask.unsqueeze(-1), sample_vectors(samples, self.codebook_size), self.embed
         )
         self.embed.data.copy_(modified_codebook)
 
@@ -140,7 +143,7 @@ class EuclideanCodebook(nn.Module):
         if self.threshold_ema_dead_code == 0:
             return
 
-        expired_codes = (self.cluster_size < self.threshold_ema_dead_code)
+        expired_codes = self.cluster_size < self.threshold_ema_dead_code
 
         if not torch.any(expired_codes):
             return
@@ -155,11 +158,12 @@ class EuclideanCodebook(nn.Module):
 
         if self._is_distributed():
             self.embed.data = accelerate.utils.broadcast(
-                self.embed.data, from_process=0)
+                self.embed.data, from_process=0
+            )
 
     def preprocess(self, x):
         """flatten all but last dimension"""
-        return einops.rearrange(x, '... d -> (...) d')
+        return einops.rearrange(x, "... d -> (...) d")
 
     def quantize(self, x):
         # (n, d) -> (d, n)
@@ -222,9 +226,11 @@ class EuclideanCodebook(nn.Module):
 
             if self._is_distributed():
                 global_cluster_count = self.accelerator.reduce(
-                    local_cluster_count, reduction="sum")
+                    local_cluster_count, reduction="sum"
+                )
                 global_embed_sum = self.accelerator.reduce(
-                    local_embed_sum, reduction="sum")
+                    local_embed_sum, reduction="sum"
+                )
             else:
                 global_cluster_count = local_cluster_count
                 global_embed_sum = local_embed_sum
@@ -233,8 +239,8 @@ class EuclideanCodebook(nn.Module):
             ema_inplace(self.embed_sum, global_embed_sum.t(), self.decay)
 
             cluster_size = (
-                laplace_smoothing(
-                    self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
+                laplace_smoothing(self.cluster_size, self.codebook_size, self.eps)
+                * self.cluster_size.sum()
             )
 
             embed_normalized = self.embed_sum / cluster_size.unsqueeze(-1)
@@ -253,17 +259,20 @@ class EuclideanCodebook(nn.Module):
 class VectorQuantization(nn.Module):
     """Standard VQ method"""
 
-    def __init__(self,
-                 dim,
-                 codebook_size,
-                 codebook_dim=None,
-                 decay=0.99,
-                 eps=1e-5,
-                 kmeans_init=True,
-                 kmeans_iters=50,
-                 threshold_ema_dead_code=2,
-                 commitment_weight=1,
-                 accelerator=None):
+    def __init__(
+        self,
+        dim,
+        codebook_size,
+        codebook_dim=None,
+        decay=0.99,
+        eps=1e-5,
+        kmeans_init=True,
+        kmeans_iters=50,
+        threshold_ema_dead_code=2,
+        commitment_weight=1,
+        accelerator=None,
+    ):
+        super().__init__()
 
         self.decay = decay
         self.codebook_size = codebook_size
@@ -275,17 +284,24 @@ class VectorQuantization(nn.Module):
 
         codebook_dim = codebook_dim if codebook_dim is not None else dim
         requires_projection = codebook_dim != dim
-        self.proj_in = nn.Linear(
-            dim, codebook_dim) if requires_projection else nn.Identity()
-        self.proj_out = nn.Linear(
-            codebook_dim, dim) if requires_projection else nn.Identity()
+        self.proj_in = (
+            nn.Linear(dim, codebook_dim) if requires_projection else nn.Identity()
+        )
+        self.proj_out = (
+            nn.Linear(codebook_dim, dim) if requires_projection else nn.Identity()
+        )
 
         # Setup codebook #
-        self._codebook = EuclideanCodebook(dim=codebook_dim, codebook_size=codebook_size,
-                                           kmeans_init=kmeans_init, kmeans_iters=kmeans_iters,
-                                           decay=decay, eps=eps,
-                                           threshold_ema_dead_code=threshold_ema_dead_code,
-                                           accelerator=accelerator)
+        self._codebook = EuclideanCodebook(
+            dim=codebook_dim,
+            codebook_size=codebook_size,
+            kmeans_init=kmeans_init,
+            kmeans_iters=kmeans_iters,
+            decay=decay,
+            eps=eps,
+            threshold_ema_dead_code=threshold_ema_dead_code,
+            accelerator=accelerator,
+        )
 
     @torch.no_grad()
     def encode(self, x):
@@ -396,18 +412,18 @@ def test_codebook():
         codebook_size=codebook_size,
         kmeans_init=True,
         accelerator=accelerator,
-        threshold_ema_dead_code=10
+        threshold_ema_dead_code=10,
     )
 
     # Move to device and prepare
     codebook = codebook.to(accelerator.device)
     codebook.train()
 
-    accelerator.print(f"\n{'='*50}")
-    accelerator.print(f"Testing EuclideanCodebook with DDP")
+    accelerator.print(f"\n{'=' * 50}")
+    accelerator.print("Testing EuclideanCodebook with DDP")
     accelerator.print(f"Number of processes: {accelerator.num_processes}")
     accelerator.print(f"Current process: {accelerator.process_index}")
-    accelerator.print(f"{'='*50}\n")
+    accelerator.print(f"{'=' * 50}\n")
 
     # Test initialization
     accelerator.print("Step 1: Testing k-means initialization...")
@@ -422,7 +438,7 @@ def test_codebook():
     if accelerator.is_main_process:
         embed_sum = codebook.embed.sum().item()
         cluster_size_sum = codebook.cluster_size.sum().item()
-        accelerator.print(f"✓ Initialization complete")
+        accelerator.print("✓ Initialization complete")
         accelerator.print(f"  Embed sum: {embed_sum:.4f}")
         accelerator.print(f"  Cluster size sum: {cluster_size_sum:.4f}")
 
@@ -439,8 +455,10 @@ def test_codebook():
         if accelerator.is_main_process:
             embed_sum = codebook.embed.sum().item()
             cluster_size_sum = codebook.cluster_size.sum().item()
-            accelerator.print(f"  Step {
-                              step+1}: embed_sum={embed_sum:.4f}, cluster_size_sum={cluster_size_sum:.4f}")
+            accelerator.print(
+                f"  Step {step + 1}: embed_sum={embed_sum:.4f}, cluster_size_sum={
+                    cluster_size_sum:.4f}"
+            )
 
     # Verify synchronization across GPUs
     accelerator.print("\nStep 3: Verifying buffer synchronization...")
@@ -451,32 +469,37 @@ def test_codebook():
         cluster_size_gathered = accelerator.gather(codebook.cluster_size)
 
         if accelerator.is_main_process:
-
             # Check if all processes have identical embeddings
             embed_split = embed_gathered.view(
-                accelerator.num_processes, codebook_size, dim)
+                accelerator.num_processes, codebook_size, dim
+            )
             cluster_size_split = cluster_size_gathered.view(
-                accelerator.num_processes, codebook_size)
+                accelerator.num_processes, codebook_size
+            )
 
-            embed_diff = (embed_split[0].unsqueeze(
-                0) - embed_split[1:]).abs().max().item()
-            cluster_diff = (cluster_size_split[0].unsqueeze(
-                0) - cluster_size_split[1:]).abs().max().item()
+            embed_diff = (
+                (embed_split[0].unsqueeze(0) - embed_split[1:]).abs().max().item()
+            )
+            cluster_diff = (
+                (cluster_size_split[0].unsqueeze(0) - cluster_size_split[1:])
+                .abs()
+                .max()
+                .item()
+            )
 
+            accelerator.print(f"Max embedding difference across GPUs: {embed_diff:.2e}")
             accelerator.print(
-                f"Max embedding difference across GPUs: {embed_diff:.2e}")
-            accelerator.print(f"Max cluster_size difference across GPUs: {
-                              cluster_diff:.2e}")
+                f"Max cluster_size difference across GPUs: {cluster_diff:.2e}"
+            )
 
             if embed_diff < 1e-5 and cluster_diff < 1e-5:
-                accelerator.print(
-                    "SUCCESS: All buffers are properly synchronized!")
+                accelerator.print("SUCCESS: All buffers are properly synchronized!")
             else:
                 accelerator.print("FAILED: Buffers are not synchronized!")
     else:
         accelerator.print("Single process mode - no synchronization needed")
 
-    accelerator.print(f"\n{'='*50}\n")
+    accelerator.print(f"\n{'=' * 50}\n")
 
     accelerator.end_training()
 

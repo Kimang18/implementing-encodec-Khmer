@@ -1,12 +1,12 @@
-import torch
-import torch.nn as nn
 import random
-import accelerate
 from dataclasses import dataclass, field
-from typing import Tuple, Dict, Any
+from typing import Any
 
-from seanet import SEANetEncoder, SEANetDecoder
+import accelerate
+import torch
 from quantizer import ResidualVectorQuantization
+from seanet import SEANetDecoder, SEANetEncoder
+from torch import nn
 
 
 @dataclass
@@ -16,13 +16,13 @@ class EnCodecConfig:
     dimension: int = 128
     n_filters: int = 32
     n_residual_layers: int = 1
-    ratios: Tuple[int, ...] = (8, 5, 4, 2)
+    ratios: tuple[int, ...] = (8, 5, 4, 2)
     activation: str = "ELU"
-    activation_kwargs: Dict[str, Any] = field(default_factory=lambda: {"alpha": 1.0})
+    activation_kwargs: dict[str, Any] = field(default_factory=lambda: {"alpha": 1.0})
     final_activation: str = None
-    final_activation_kwargs: Dict[str, Any] = field(default_factory=dict)
+    final_activation_kwargs: dict[str, Any] = field(default_factory=dict)
     norm_type: str = "weight_norm"
-    norm_kwargs: Dict[str, Any] = field(default_factory=dict)
+    norm_kwargs: dict[str, Any] = field(default_factory=dict)
     kernel_size: int = 7
     last_kernel_size: int = 7
     residual_kernel_size: int = 3
@@ -53,36 +53,58 @@ class EncodecModel(nn.Module):
         self.accelerator = accelerator
 
         self.encoder = SEANetEncoder(
-            channels=config.channels, dimension=config.dimension, n_filters=config.n_filters,
-            n_residual_layers=config.n_residual_layers, ratios=config.ratios,
-            activation=config.activation, activation_kwargs=config.activation_kwargs,
-            norm_type=config.norm_type, norm_kwargs=config.norm_kwargs,
-            kernel_size=config.kernel_size, last_kernel_size=config.last_kernel_size,
+            channels=config.channels,
+            dimension=config.dimension,
+            n_filters=config.n_filters,
+            n_residual_layers=config.n_residual_layers,
+            ratios=config.ratios,
+            activation=config.activation,
+            activation_kwargs=config.activation_kwargs,
+            norm_type=config.norm_type,
+            norm_kwargs=config.norm_kwargs,
+            kernel_size=config.kernel_size,
+            last_kernel_size=config.last_kernel_size,
             residual_kernel_size=config.residual_kernel_size,
-            dilation_base=config.dilation_base, pad_mode=config.pad_mode,
-            true_skip=config.true_skip, compress=config.compress, lstm=config.lstm,
-            lstm_bidirectional=config.lstm_bidirectional
+            dilation_base=config.dilation_base,
+            pad_mode=config.pad_mode,
+            true_skip=config.true_skip,
+            compress=config.compress,
+            lstm=config.lstm,
+            lstm_bidirectional=config.lstm_bidirectional,
         )
         self.quantizer = ResidualVectorQuantization(
-            n_quantizers=config.n_quantizers, dim=self.encoder.dimension,
-            codebook_size=config.codebook_size, codebook_dim=config.codebook_dim,
-            decay=config.decay, kmeans_init=config.kmeans_init,
+            n_quantizers=config.n_quantizers,
+            dim=self.encoder.dimension,
+            codebook_size=config.codebook_size,
+            codebook_dim=config.codebook_dim,
+            decay=config.decay,
+            kmeans_init=config.kmeans_init,
             kmeans_iters=config.kmeans_iters,
             threshold_ema_dead_code=config.threshold_ema_dead_code,
-            commitment_weight=config.commit_weight, accelerator=accelerator
+            commitment_weight=config.commit_weight,
+            accelerator=accelerator,
         )
         self.decoder = SEANetDecoder(
-            channels=config.channels, dimension=config.dimension, n_filters=config.n_filters,
-            n_residual_layers=config.n_residual_layers, ratios=config.ratios,
-            activation=config.activation, activation_kwargs=config.activation_kwargs,
+            channels=config.channels,
+            dimension=config.dimension,
+            n_filters=config.n_filters,
+            n_residual_layers=config.n_residual_layers,
+            ratios=config.ratios,
+            activation=config.activation,
+            activation_kwargs=config.activation_kwargs,
             final_activation=config.final_activation,
             final_activation_kwargs=config.final_activation_kwargs,
-            norm_type=config.norm_type, norm_kwargs=config.norm_kwargs,
-            kernel_size=config.kernel_size, last_kernel_size=config.last_kernel_size,
+            norm_type=config.norm_type,
+            norm_kwargs=config.norm_kwargs,
+            kernel_size=config.kernel_size,
+            last_kernel_size=config.last_kernel_size,
             residual_kernel_size=config.residual_kernel_size,
-            dilation_base=config.dilation_base, pad_mode=config.pad_mode,
-            true_skip=config.true_skip, compress=config.compress, lstm=config.lstm,
-            lstm_bidirectional=config.lstm_bidirectional
+            dilation_base=config.dilation_base,
+            pad_mode=config.pad_mode,
+            true_skip=config.true_skip,
+            compress=config.compress,
+            lstm=config.lstm,
+            lstm_bidirectional=config.lstm_bidirectional,
         )
 
     def _is_distributed(self):
@@ -109,24 +131,30 @@ class EncodecModel(nn.Module):
 
         encoded = self.encoder(x)
 
-        n_codebooks_to_use = torch.tensor(random.randint(0, self.n_quantizers), device=x.device)
+        n_codebooks_to_use = torch.tensor(
+            random.randint(0, self.n_quantizers), device=x.device
+        )
 
         if self._is_distributed():
-            n_codebooks_to_use = accelerate.utils.broadcast(n_codebooks_to_use, from_process=0)
+            n_codebooks_to_use = accelerate.utils.broadcast(
+                n_codebooks_to_use, from_process=0
+            )
 
         quantize_out, _, out_losses = self.quantizer(encoded, n_codebooks_to_use)
 
         decoded = self.decoder(quantize_out)
 
-        decoded = self.denormalize(decode, scale)
+        decoded = self.denormalize(decoded, scale)
 
         # remove extra-padding due to SConv1d
         decoded = decoded[:, :, :seq_len]
 
-        return {"encoder_out": encoded,
-                "quantize": quantize_out,
-                "quantizer_loss": torch.mean(out_losses),
-                "decoded": decoded}
+        return {
+            "encoder_out": encoded,
+            "quantize": quantize_out,
+            "quantizer_loss": torch.mean(out_losses),
+            "decoded": decoded,
+        }
 
     @torch.no_grad()
     def tokenize(self, x):
@@ -165,6 +193,7 @@ class EncodecModel(nn.Module):
         reconstruction = self.decode(tokens, scale, max_len=x.shape[-1])
 
         return reconstruction
+
 
 if __name__ == "__main__":
     rand = torch.rand(2, 1, 5)
