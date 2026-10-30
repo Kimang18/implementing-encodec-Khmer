@@ -5,6 +5,7 @@ from typing import Any
 import lightning as L
 import torch
 import torch.nn.functional as F
+from datasets import Audio, load_dataset
 from datasets.distributed import split_dataset_by_node
 from torch.utils.data import get_worker_info
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -43,6 +44,7 @@ class AudioDataset:
 class AudioDataModule(L.LightningDataModule):
     def __init__(
         self,
+        hf_repo="Digital-Divide-Data/khmer-speech-dataset",
         segment_length=16000,
         sample_rate=16000,
         bs_per_device=4,
@@ -51,7 +53,10 @@ class AudioDataModule(L.LightningDataModule):
         self.save_hyperparameters()
 
     def setup(self, stage=None):
-        pass
+        ds = load_dataset(self.hparams.hf_repo, streaming=True)
+        ds = ds.cast_column("audio", Audio(sampling_rate=self.hparams.sample_rate))
+        self.ds_train = ds["train"]
+        self.ds_validation = ds["test"]
 
     def get_dataloader(self, dataset, batch_size, num_workers, shard_on_rank=True):
         def worker_init_fn(worker_id: int):
