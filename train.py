@@ -6,6 +6,8 @@ import hydra
 import lightning as L
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
+import torchaudio.transforms as T
 from lightning.pytorch import seed_everything
 from lightning.pytorch.callbacks import TQDMProgressBar
 from omegaconf import DictConfig
@@ -16,13 +18,18 @@ from transformers import get_cosine_schedule_with_warmup
 
 from src.balancer import Balancer
 from src.dataset import AudioDataModule
-from src.loss import discriminator_loss, generator_loss
 from src.modules.discriminator import Discriminator, DiscriminatorConfig
 from src.modules.encodec import EnCodecConfig, EnCodecModel
 from src.utils import save_audios
 
 # Set the logging level for httpx to WARNING to hide INFO logs
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+def make_buffers_non_persistent(module: nn.Module):
+    """Avoid saving MelSpectrogram buffers in checkpoint"""
+    for m in module.modules():
+        m._non_persistent_buffers_set.update(m._buffers.keys())
 
 
 class TrainModule(L.LightningModule):
@@ -64,8 +71,107 @@ class TrainModule(L.LightningModule):
             {"time_loss": MeanMetric(), "frequency_loss": MeanMetric()}
         )
 
+        # different MelSpectrogram converters for generator_loss
+        ffts = []
+        mel_fmin, mel_fmax = 0.0, 8000.0
+        for i in range(5, 12):  # 2**5 -> 2**11
+            window_size = 2**i
+            hop_size = window_size // 4
+            ffts.append(
+                T.MelSpectrogram(
+                    n_fft=window_size,
+                    win_length=window_size,
+                    hop_length=hop_size,
+                    sample_rate=sample_rate,
+                    n_mels=n_mels,
+                    f_min=mel_fmin,
+                    f_max=mel_fmax,
+                    center=False,
+                    window_fn=torch.hann_window,
+                )
+            )
+            make_buffers_non_persistent(ffts[-1])
+        self.ffts = nn.ModuleList(ffts)
+
         # Important: this property activates manual optimization.
         self.automatic_optimization = False
+
+    def _compute_generator_loss(
+        self,
+        fmap_real,  # list[list[tensor]] -> K discriminators, L layers each
+        fmap_fake,  # list[list[tensor]]
+        logits_fake,  # list[tensor] -> K discriminators
+        input_wav,
+        output_wav,
+    ):
+        # time domain loss #
+        time_loss = F.l1_loss(input_wav, output_wav)
+
+        # freq domain loss #
+        frequency_loss = 0.0
+        for fft in self.ffts:
+            input_mel = fft(input_wav)
+            output_mel = fft(output_wav)
+
+            frequency_loss = (
+                frequency_loss
+                + F.l1_loss(input_mel, output_mel)
+                + F.mse_loss(input_mel, output_mel)
+            )
+        frequency_loss = frequency_loss / len(self.ffts)
+
+        # generation capacity #
+        if (
+            (fmap_real is not None)
+            and (fmap_fake is not None)
+            and (logits_fake is not None)
+        ):
+            K = len(logits_fake)
+            L = len(fmap_fake[0])
+
+            generator_loss = 0.0
+            for lfake in logits_fake:
+                generator_loss = generator_loss + torch.mean(F.relu(1 - lfake))
+            generator_loss = generator_loss / K
+
+            feature_loss = 0.0
+            for freals, ffakes in zip(fmap_real, fmap_fake):
+                for freal, ffake in zip(freals, ffakes):
+                    feature_loss = feature_loss + F.l1_loss(freal, ffake) / torch.mean(
+                        torch.abs(freal)
+                    )
+            feature_loss = feature_loss / (K * L)
+        else:
+            generator_loss = torch.tensor(
+                [0.0],
+                dtype=output_wav.dtype,
+                device=output_wav.device,
+                requires_grad=True,
+            )
+            feature_loss = torch.tensor(
+                [0.0],
+                dtype=output_wav.dtype,
+                device=output_wav.device,
+                requires_grad=True,
+            )
+
+        return {
+            "time_loss": time_loss,
+            "frequency_loss": frequency_loss,
+            "generator_loss": generator_loss,
+            "feature_loss": feature_loss,
+        }
+
+    def _compute_discriminator_loss(self, logits_real, logits_fake):
+        disc_loss = 0.0
+        for lreal, lfake in zip(logits_real, logits_fake):
+            disc_loss = (
+                disc_loss
+                + torch.mean(F.relu(1 - lreal))
+                + torch.mean(F.relu(1 + lfake))
+            )
+        disc_loss = disc_loss / len(logits_real)
+        return disc_loss
 
     def training_step(self, batch: dict[str, Any], batch_idx: int):
         g_opt, d_opt = self.optimizers()
@@ -82,7 +188,7 @@ class TrainModule(L.LightningModule):
             waveforms, output["decoded"]
         )
 
-        losses = generator_loss(
+        losses = self._compute_generator_loss(
             fmap_real,
             fmap_fake,
             logits_fake,
@@ -131,7 +237,7 @@ class TrainModule(L.LightningModule):
             logits_real, logits_fake, _, _ = self.discriminator(
                 waveforms, output["decoded"].detach()
             )
-            disc_loss = discriminator_loss(logits_real, logits_fake)
+            disc_loss = self._compute_discriminator_loss(logits_real, logits_fake)
             self.manual_backward(disc_loss)
             # clip gradient norm
             self.clip_gradients(
@@ -203,7 +309,7 @@ class TrainModule(L.LightningModule):
             batch["waveforms"], output["decoded"]
         )
 
-        losses = generator_loss(
+        losses = self._compute_generator_loss(
             fmap_real,
             fmap_fake,
             logits_fake,
@@ -277,10 +383,14 @@ class TrainModule(L.LightningModule):
 
     def configure_optimizers(self):
         G_optimizer = torch.optim.Adam(
-            [p for p in self.generator.parameters()], lr=self.hparams.learning_rate
+            [p for p in self.generator.parameters()],
+            lr=self.hparams.learning_rate,
+            betas=(0.5, 0.9),
         )
         D_optimizer = torch.optim.Adam(
-            [p for p in self.discriminator.parameters()], lr=self.hparams.learning_rate
+            [p for p in self.discriminator.parameters()],
+            lr=self.hparams.learning_rate,
+            betas=(0.5, 0.9),
         )
         optimizer_steps = int(
             self.trainer.max_steps / self.trainer.accumulate_grad_batches
