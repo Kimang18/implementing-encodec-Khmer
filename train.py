@@ -197,8 +197,6 @@ class TrainModule(L.LightningModule):
             logits_fake,
             waveforms,
             output["decoded"],
-            sample_rate=self.hparams.sample_rate,
-            n_mels=self.hparams.n_mels,
         )
         if not self.hparams.use_balancer:
             total_gen_loss = sum(
@@ -318,8 +316,6 @@ class TrainModule(L.LightningModule):
             logits_fake,
             batch["waveforms"],
             output["decoded"],
-            sample_rate=self.hparams.sample_rate,
-            n_mels=self.hparams.n_mels,
         )
         self.val_loss.update(
             self.weights["time_loss"] * losses["time_loss"]
