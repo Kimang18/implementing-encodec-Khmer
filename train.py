@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Any
 
 import hydra
@@ -18,6 +19,7 @@ from src.dataset import AudioDataModule
 from src.loss import discriminator_loss, generator_loss
 from src.modules.discriminator import Discriminator, DiscriminatorConfig
 from src.modules.encodec import EnCodecConfig, EnCodecModel
+from src.utils import save_audios
 
 # Set the logging level for httpx to WARNING to hide INFO logs
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -236,7 +238,25 @@ class TrainModule(L.LightningModule):
 
     def on_validation_epoch_end(self):
         # TODO: save a few samples
-        pass
+        if self.trainer.sanity_checking:
+            return
+        if not self.trainer.is_global_zero:
+            return
+        self._save_generated_audio()
+
+    def _save_generated_audio(self):
+        batch = next(iter(self.trainer.val_dataloaders))
+        gens = self.generator.passthrough(batch).detach().cpu()
+        path_to_save_dir = os.path.join(
+            "./gen_samples",
+            f"gen_iter_{self.trainer.fit_loop.epoch_loop.total_batch_idx}",
+        )
+        os.makedirs(path_to_save_dir, exist_ok=True)
+        path_to_saves = [
+            os.path.join(path_to_save_dir, file)
+            for file in [f"gen_{i}.wav" for i in range(len(gens))]
+        ]
+        save_audios(gens, path_to_saves, self.hparams.sample_rate)
 
     def on_save_checkpoint(self, checkpoint):
         train_dataloader = self.trainer.train_dataloader
