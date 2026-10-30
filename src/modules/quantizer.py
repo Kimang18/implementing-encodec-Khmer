@@ -4,9 +4,6 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
 
-WORLD_SIZE = dist.get_world_size()
-IS_MAIN_PROCESS = dist.get_rank() == 0
-
 
 def ema_inplace(moving_average, new, decay):
     """moving_average=moving_average * gamma + (1-gamma)*new"""
@@ -90,7 +87,9 @@ class EuclideanCodebook(nn.Module):
         self.register_buffer("embed_sum", embed.clone())
 
     def _is_distributed(self):
-        return dist.is_available() and dist.is_initialized() and WORLD_SIZE > 1
+        return (
+            dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1
+        )
 
     def _broadcast_buffers(self):
         if not self._is_distributed():
@@ -106,13 +105,13 @@ class EuclideanCodebook(nn.Module):
 
         if self._is_distributed():
             all_data = torch.empty(
-                WORLD_SIZE * data.shape[0],
+                dist.get_world_size() * data.shape[0],
                 *data.shape[1:],
                 dtype=data.dtype,
                 device=data.device,
             )
             dist.all_gather_into_tensor(all_data, data.contiguous())
-            if IS_MAIN_PROCESS:
+            if dist.get_rank() == 0:
                 embed, cluster_size = kmeans(
                     all_data, self.codebook_size, self.kmeans_iters
                 )
@@ -151,7 +150,7 @@ class EuclideanCodebook(nn.Module):
 
         batch_samples = einops.rearrange(batch_samples, "... d -> (...) d")
 
-        if not self._is_distributed() or IS_MAIN_PROCESS:
+        if not self._is_distributed() or dist.get_rank() == 0:
             self.replace_(batch_samples, mask=expired_codes)
 
         if self._is_distributed():
@@ -208,12 +207,14 @@ class EuclideanCodebook(nn.Module):
 
         embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(dtype)
 
+        embed_ind = self.postprocess_emb(embed_ind, shape)
+
         quantized = self.dequantize(embed_ind)
 
         if self.training:
             if self._is_distributed():
                 batch_samples = torch.empty(
-                    WORLD_SIZE * x.shape[0],
+                    dist.get_world_size() * x.shape[0],
                     *x.shape[1:],
                     dtype=x.dtype,
                     device=x.device,
@@ -319,7 +320,7 @@ class VectorQuantization(nn.Module):
     def forward(self, x):
         device = x.device
 
-        x = einops(x, "b d n -> b n d")
+        x = einops.rearrange(x, "b d n -> b n d")
 
         x = self.proj_in(x)
 

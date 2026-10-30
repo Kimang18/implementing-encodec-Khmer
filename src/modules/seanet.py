@@ -1,8 +1,9 @@
 import numpy as np
 import torch
-from conv import SConv1d, SConvTranspose1d
-from lstm import SLSTM
 from torch import nn
+
+from .conv import SConv1d, SConvTranspose1d
+from .lstm import SLSTM
 
 
 class SEANetResnetBlock(nn.Module):

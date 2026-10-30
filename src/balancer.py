@@ -106,7 +106,7 @@ class Balancer:
 
         for name, avg_norm in avg_norms.items():
             scale = ratios[name] * self.total_norm / (self.eps + avg_norm)
-            scale = torch.clip(scale, min=self.min_scale, max=self.max_scale)
+            scale = max(self.min_scale, min(scale, self.max_scale))
             if grads[name] is not None:
                 grad = grads[name] * scale
                 out_grad += grad

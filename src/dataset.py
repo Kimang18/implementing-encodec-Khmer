@@ -36,20 +36,21 @@ class AudioDataset:
                 padding = self.segment_length - n_samples
                 waveform = F.pad(waveform, (0, padding), mode="constant", value=0)
 
-            waveforms.append(waveform.unsqueeze(0))
+            waveforms.append(torch.as_tensor(waveform[None, :]))
 
-        return {"waveforms": waveforms}
+        return {"waveforms": torch.stack(waveforms)}
 
 
 class AudioDataModule(L.LightningDataModule):
     def __init__(
         self,
+        sample_rate=16000,
         hf_repo="Digital-Divide-Data/khmer-speech-dataset",
         segment_length=16000,
-        sample_rate=16000,
         bs_per_device=4,
         n_worker_per_device=0,
     ):
+        super().__init__()
         self.save_hyperparameters()
 
     def setup(self, stage=None):
@@ -98,12 +99,12 @@ class AudioDataModule(L.LightningDataModule):
             num_workers=num_workers,
             pin_memory=num_workers > 0,
             persistent_workers=num_workers > 0,
-            prefect_factor=2 if num_workers > 0 else None,
+            prefetch_factor=2 if num_workers > 0 else None,
             drop_last=True,
             worker_init_fn=worker_init_fn,
         )
 
-    def train_loader(self):
+    def train_dataloader(self):
         loader = self.get_dataloader(
             self.ds_train,
             self.hparams.bs_per_device,
@@ -118,7 +119,7 @@ class AudioDataModule(L.LightningDataModule):
                 self.trainer.lightning_module._restore_dataset = None
         return loader
 
-    def val_loader(self):
+    def val_dataloader(self):
         return self.get_dataloader(
             self.ds_validation, self.hparams.bs_per_device, 0, False
         )

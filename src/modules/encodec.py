@@ -4,11 +4,10 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
-from quantizer import ResidualVectorQuantization
-from seanet import SEANetDecoder, SEANetEncoder
 from torch import nn
 
-WORLD_SIZE = dist.get_world_rank()
+from .quantizer import ResidualVectorQuantization
+from .seanet import SEANetDecoder, SEANetEncoder
 
 
 @dataclass
@@ -46,7 +45,7 @@ class EnCodecConfig:
     commit_weight: float = 1
 
 
-class EncodecModel(nn.Module):
+class EnCodecModel(nn.Module):
     def __init__(self, config):
         super().__init__()
 
@@ -108,7 +107,9 @@ class EncodecModel(nn.Module):
         )
 
     def _is_distributed(self):
-        return dist.is_available() and dist.is_initialized() and WORLD_SIZE > 1
+        return (
+            dist.is_available() and dist.is_initialized() and dist.get_world_rank() > 1
+        )
 
     def normalize(self, x):
         batch_size, channels, seq_len = x.shape
@@ -196,7 +197,7 @@ class EncodecModel(nn.Module):
 if __name__ == "__main__":
     rand = torch.rand(2, 1, 5)
     config = EnCodecConfig()
-    model = EncodecModel(config)
+    model = EnCodecModel(config)
     out, scale = model.normalize(rand)
     denormed = model.denormalize(out, scale)
 

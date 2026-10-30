@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 import hydra
@@ -16,7 +17,10 @@ from src.balancer import Balancer
 from src.dataset import AudioDataModule
 from src.loss import discriminator_loss, generator_loss
 from src.modules.discriminator import Discriminator, DiscriminatorConfig
-from src.modules.encodec import EncodecConfig, EncodecModel
+from src.modules.encodec import EnCodecConfig, EnCodecModel
+
+# Set the logging level for httpx to WARNING to hide INFO logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 class TrainModule(L.LightningModule):
@@ -24,6 +28,9 @@ class TrainModule(L.LightningModule):
         self,
         generator,
         discriminator,
+        sample_rate=16000,
+        n_mels=80,
+        learning_rate=1e-4,
         disc_update_prob=0.66,
         max_grad_norm=0.5,
         time_loss_lambda=0.1,
@@ -79,8 +86,8 @@ class TrainModule(L.LightningModule):
             logits_fake,
             waveforms,
             output["decoded"],
-            sample_rate=self.sample_rate,
-            n_mels=self.n_mels,
+            sample_rate=self.hparams.sample_rate,
+            n_mels=self.hparams.n_mels,
         )
         if not self.hparams.use_balancer:
             total_gen_loss = sum(
@@ -115,7 +122,8 @@ class TrainModule(L.LightningModule):
         # discriminator step #
         d_opt.zero_grad(set_to_none=True)
         rand = torch.rand(size=(), device=waveforms.device)
-        dist.broadcast(rand, src=0)
+        if dist.is_available() and dist.is_initialized():
+            dist.broadcast(rand, src=0)
 
         if rand < self.hparams.disc_update_prob:
             logits_real, logits_fake, _, _ = self.discriminator(
@@ -133,7 +141,7 @@ class TrainModule(L.LightningModule):
                 d_opt.step()
                 d_sch.step()
         else:
-            disc_loss = "skipped"
+            disc_loss = 0.0
             if (batch_idx + 1) % self.trainer.accumulate_grad_batches == 0:
                 d_sch.step()
 
@@ -149,15 +157,28 @@ class TrainModule(L.LightningModule):
             batch_size=bs,
         )
         for name, loss in losses.items():
-            self.log(f"train/{name}", loss, on_step=True, on_epoch=False, batch_size=bs)
+            self.log(
+                f"train/{name}",
+                loss,
+                on_step=True,
+                on_epoch=False,
+                prog_bar=True,
+                batch_size=bs,
+            )
         self.log(
-            "train/discrim_loss", disc_loss, on_step=True, on_epoch=False, batch_size=bs
+            "train/discrim_loss",
+            disc_loss,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+            batch_size=bs,
         )
         self.log(
             "train/gen_lr",
             g_sch.get_last_lr()[0],
             on_step=True,
             on_epoch=False,
+            prog_bar=True,
             batch_size=bs,
         )
         self.log(
@@ -165,11 +186,12 @@ class TrainModule(L.LightningModule):
             d_sch.get_last_lr()[0],
             on_step=True,
             on_epoch=False,
+            prog_bar=True,
             batch_size=bs,
         )
 
     def on_train_start(self):
-        self.train_loss.reset()
+        # self.train_loss.reset()
         self.val_loss.reset()
 
     def validation_step(self, batch: dict[str, Any], batch_idx: int):
@@ -185,8 +207,8 @@ class TrainModule(L.LightningModule):
             logits_fake,
             batch["waveforms"],
             output["decoded"],
-            sample_rate=self.sample_rate,
-            n_mels=self.n_mels,
+            sample_rate=self.hparams.sample_rate,
+            n_mels=self.hparams.n_mels,
         )
         self.val_loss.update(
             self.weights["time_loss"] * losses["time_loss"]
@@ -238,7 +260,7 @@ class TrainModule(L.LightningModule):
         optimizer_steps = int(
             self.trainer.max_steps / self.trainer.accumulate_grad_batches
         )
-        warmup_steps = int(0.015 * optimizer_steps)
+        warmup_steps = int(0.05 * optimizer_steps)
         G_scheduler = get_cosine_schedule_with_warmup(
             G_optimizer,
             num_warmup_steps=warmup_steps,
@@ -255,10 +277,10 @@ class TrainModule(L.LightningModule):
 @hydra.main(version_base="1.3", config_path="configs", config_name="config")
 def main(cfg: DictConfig):
     seed_everything(seed=3407, workers=True)
-    dm = AudioDataModule(**cfg.data)
+    dm = AudioDataModule(cfg.module.sample_rate, **cfg.data)
 
-    encodec_cfg = EncodecConfig(**cfg.gen)
-    generator = EncodecModel(encodec_cfg)
+    encodec_cfg = EnCodecConfig(**cfg.gen)
+    generator = EnCodecModel(encodec_cfg)
     discrim_cfg = DiscriminatorConfig(**cfg.disc)
     discriminator = Discriminator(discrim_cfg)
 
@@ -267,7 +289,7 @@ def main(cfg: DictConfig):
         # num_sanity_val_step=0,
         enable_progress_bar=True,
         check_val_every_n_epoch=None,
-        callbacks=[TQDMProgressBar(refresh_rate=400)],
+        callbacks=[TQDMProgressBar(refresh_rate=50)],
         **cfg.trainer,
     )
     trainer.fit(model, dm)

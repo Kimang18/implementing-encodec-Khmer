@@ -74,11 +74,12 @@ class Audio2Mel(nn.Module):
         mel_fmax=8000.0,
         device="cuda",
     ):
+        super().__init__()
         self.mel_transform = T.MelSpectrogram(
             n_fft=n_fft,
             win_length=win_length,
             hop_length=hop_length,
-            sampling_rate=sampling_rate,
+            sample_rate=sampling_rate,
             n_mels=n_mels,
             f_min=mel_fmin,
             f_max=mel_fmax,
@@ -99,6 +100,7 @@ def discriminator_loss(logits_real, logits_fake):
             disc_loss + torch.mean(F.relu(1 - lreal)) + torch.mean(F.relu(1 + lfake))
         )
     disc_loss = disc_loss / len(logits_real)
+    return disc_loss
 
 
 def generator_loss(

@@ -4,8 +4,9 @@ from typing import Any
 import einops
 import torch
 import torchaudio
-from conv import NormConv2d
 from torch import nn
+
+from .conv import NormConv2d
 
 
 @dataclass
