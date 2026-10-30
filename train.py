@@ -18,6 +18,7 @@ from transformers import get_cosine_schedule_with_warmup
 
 from src.balancer import Balancer
 from src.dataset import AudioDataModule
+from src.loss import discriminator_loss
 from src.modules.discriminator import Discriminator, DiscriminatorConfig
 from src.modules.encodec import EnCodecConfig, EnCodecModel
 from src.utils import save_audios
@@ -111,7 +112,9 @@ class TrainModule(L.LightningModule):
         frequency_loss = 0.0
         for fft in self.ffts:
             input_mel = fft(input_wav)
+            input_mel = torch.log10(torch.clamp(input_mel, min=1e-5))
             output_mel = fft(output_wav)
+            output_mel = torch.log10(torch.clamp(output_mel, min=1e-5))
 
             frequency_loss = (
                 frequency_loss
@@ -237,7 +240,7 @@ class TrainModule(L.LightningModule):
             logits_real, logits_fake, _, _ = self.discriminator(
                 waveforms, output["decoded"].detach()
             )
-            disc_loss = self._compute_discriminator_loss(logits_real, logits_fake)
+            disc_loss = discriminator_loss(logits_real, logits_fake)
             self.manual_backward(disc_loss)
             # clip gradient norm
             self.clip_gradients(
