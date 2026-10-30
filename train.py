@@ -181,7 +181,7 @@ class TrainModule(L.LightningModule):
         g_sch, d_sch = self.lr_schedulers()
 
         waveforms = batch["waveforms"]
-        bs = len(waveforms)
+        # bs = len(waveforms)
 
         # generator step #
         g_opt.zero_grad(set_to_none=True)
@@ -205,13 +205,6 @@ class TrainModule(L.LightningModule):
             total_gen_loss += (
                 self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
             )
-            # total_gen_loss = (
-            #     self.weights["time_loss"] * losses["time_loss"]
-            #     + self.weights["frequency_loss"] * losses["frequency_loss"]
-            #     + self.weights["generator_loss"] * losses["generator_loss"]
-            #     + self.weights["feature_loss"] * losses["feature_loss"]
-            #     + self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
-            # )
             self.manual_backward(total_gen_loss)
         else:
             self.balancer.backward(losses, output["decoded"], retain_graph=True)
@@ -303,7 +296,7 @@ class TrainModule(L.LightningModule):
         self.val_loss.reset()
 
     def validation_step(self, batch: dict[str, Any], batch_idx: int):
-        bs = len(batch["waveforms"])
+        # bs = len(batch["waveforms"])
         output = self.generator(batch["waveforms"])
         _, logits_fake, fmap_real, fmap_fake = self.discriminator(
             batch["waveforms"], output["decoded"]
@@ -316,26 +309,26 @@ class TrainModule(L.LightningModule):
             batch["waveforms"],
             output["decoded"],
         )
+        total_gen_loss = sum(loss * self.weights[name] for name, loss in losses.items())
+        total_gen_loss += self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
+
         self.val_loss.update(
-            self.weights["time_loss"] * losses["time_loss"]
-            + self.weights["frequency_loss"] * losses["frequency_loss"]
-            + self.weights["generator_loss"] * losses["generator_loss"]
-            + self.weights["feature_loss"] * losses["feature_loss"]
-            + self.hparams.quantizer_loss_lambda * output["quantizer_loss"],
-            weight=bs,
+            total_gen_loss,
+            # weight=bs,
         )
         self.log(
             "val/loss_total", self.val_loss, on_step=False, on_epoch=True, prog_bar=True
         )
         for name, metric in self.val_components.items():
-            metric.update(losses[name], weight=bs)
+            metric.update(losses[name])  # , weight=bs)
 
         for name, metric in self.val_components.items():
             self.log(f"val/{name}", metric, on_step=False, on_epoch=True)
 
     def setup(self, stage: str):
         if self.hparams.compile and stage == "fit":
-            self.net = torch.compile(self.net, dynamic=True)
+            self.generator = torch.compile(self.generator, dynamic=True)
+            self.discriminator = torch.compile(self.discriminator, dynamic=True)
 
         if self.hparams.use_balancer:
             self.balancer = Balancer(weights=self.weights)
