@@ -313,7 +313,7 @@ class VectorQuantization(nn.Module):
     @torch.no_grad()
     def decode(self, embed_ind):
         quantize = self._codebook.decode(embed_ind)
-        quantize = self.proj_out
+        quantize = self.proj_out(quantize)
         quantize = einops.rearrange(quantize, "b n d -> b d n")
         return quantize
 

@@ -246,7 +246,12 @@ class TrainModule(L.LightningModule):
 
     def _save_generated_audio(self):
         batch = next(iter(self.trainer.val_dataloaders))
-        gens = self.generator.passthrough(batch).detach().cpu()
+        gens = (
+            self.generator.passthrough(batch["waveforms"].to(self.device))
+            .detach()
+            .cpu()
+        )
+        gens = [waveform for waveform in gens]
         path_to_save_dir = os.path.join(
             "./gen_samples",
             f"gen_iter_{self.trainer.fit_loop.epoch_loop.total_batch_idx}",
