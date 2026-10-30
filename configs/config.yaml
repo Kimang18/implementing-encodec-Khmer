@@ -1,0 +1,68 @@
+data:
+  hf_repo: "Digital-Divide-Data/khmer-speech-dataset"
+  segment_length: 16000
+  sample_rate: 16000
+  bs_per_device: 4
+  n_worker_per_device: 0
+
+gen:
+  channels: 1
+  dimension: 128
+  n_filters: 32
+  n_residual_layers: 1
+  ratios: [8, 5, 4, 2]
+  activation: "ELU"
+  final_activation: null
+  norm_type: "weight_norm"
+  kernel_size: 7
+  last_kernel_size: 7
+  residual_kernel_size: 3
+  dilation_base: 2
+  pad_mode: "reflect"
+  true_skip: false
+  compress: 2
+  lstm: 2
+  lstm_bidirectional: True
+
+  # Quantization setup #
+  n_quantizers: 8
+  codebook_dim: null
+  codebook_size: 1024
+  decay: 0.99
+  kmeans_init: true
+  kmeans_iters: 50
+  threshold_ema_dead_code: 2
+
+disc:
+  filters: 32
+  max_filters: 1024
+  filter_scale: 1
+
+  # Multiscale STFT Discriminator #
+  n_ffts: [2048, 1024, 512, 256, 128]
+  hop_lengths: [512, 256, 128, 64, 32]
+  win_lengths: [2048, 1024, 512, 256, 128]
+  kernel_size: [3, 9]
+  dilations: [1, 2, 4]
+  stride: [1, 2]
+  normalized: true
+  norm_type: "weight_norm"
+  activation: "LeakyReLU"
+
+module:
+  disc_update_prob: 0.66
+  max_grad_norm: 1.0
+  time_loss_lambda: 0.1
+  frequency_loss_lambda: 1.0
+  generator_loss_lambda: 3.0
+  feature_loss_lambda: 3.0
+  quantizer_loss_lambda: 1.0
+  use_balancer: true
+  compile: false
+
+trainer:
+  val_check_interval: 2000
+  max_steps: 10000
+  max_epochs: -1
+  accumulate_grad_batches: 1
+  accelerate: "cuda"
