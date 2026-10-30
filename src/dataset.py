@@ -36,7 +36,9 @@ class AudioDataset:
                 padding = self.segment_length - n_samples
                 waveform = F.pad(waveform, (0, padding), mode="constant", value=0)
 
-            waveforms.append(torch.as_tensor(waveform[None, :]))
+            waveforms.append(
+                torch.as_tensor(waveform[None, :])
+            )  # add channel dimension because the dataset used is mono
 
         return {"waveforms": torch.stack(waveforms)}
 
