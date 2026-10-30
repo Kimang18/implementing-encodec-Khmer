@@ -18,7 +18,6 @@ from transformers import get_cosine_schedule_with_warmup
 
 from src.balancer import Balancer
 from src.dataset import AudioDataModule
-from src.loss import discriminator_loss
 from src.modules.discriminator import Discriminator, DiscriminatorConfig
 from src.modules.encodec import EnCodecConfig, EnCodecModel
 from src.utils import save_audios
@@ -89,6 +88,7 @@ class TrainModule(L.LightningModule):
                     f_max=mel_fmax,
                     center=False,
                     window_fn=torch.hann_window,
+                    normalized=True,
                 )
             )
             make_buffers_non_persistent(ffts[-1])
@@ -238,7 +238,7 @@ class TrainModule(L.LightningModule):
             logits_real, logits_fake, _, _ = self.discriminator(
                 waveforms, output["decoded"].detach()
             )
-            disc_loss = discriminator_loss(logits_real, logits_fake)
+            disc_loss = self._compute_discriminator_loss(logits_real, logits_fake)
             self.manual_backward(disc_loss)
             # clip gradient norm
             self.clip_gradients(
@@ -249,22 +249,21 @@ class TrainModule(L.LightningModule):
             if (batch_idx + 1) % self.trainer.accumulate_grad_batches == 0:
                 d_opt.step()
                 d_sch.step()
+            self.log(
+                "train/discrim_loss",
+                disc_loss,
+                on_step=True,
+                on_epoch=False,
+                prog_bar=True,
+                # batch_size=bs,
+            )
         else:
-            disc_loss = 0.0
             if (batch_idx + 1) % self.trainer.accumulate_grad_batches == 0:
                 d_sch.step()
 
         # for name, loss in losses.items():
         #     self.train_components[name].update(loss, weight=bs)
         # self.train_components["quantizer_loss"].update(output["quantizer_loss"])
-        self.log(
-            "train/quantizer_loss",
-            output["quantizer_loss"],
-            on_step=True,
-            on_epoch=False,
-            prog_bar=True,
-            batch_size=bs,
-        )
         for name, loss in losses.items():
             self.log(
                 f"train/{name}",
@@ -272,15 +271,15 @@ class TrainModule(L.LightningModule):
                 on_step=True,
                 on_epoch=False,
                 prog_bar=True,
-                batch_size=bs,
+                # batch_size=bs,
             )
         self.log(
-            "train/discrim_loss",
-            disc_loss,
+            "train/quantizer_loss",
+            output["quantizer_loss"],
             on_step=True,
             on_epoch=False,
             prog_bar=True,
-            batch_size=bs,
+            # batch_size=bs,
         )
         self.log(
             "train/gen_lr",
@@ -288,7 +287,7 @@ class TrainModule(L.LightningModule):
             on_step=True,
             on_epoch=False,
             prog_bar=True,
-            batch_size=bs,
+            # batch_size=bs,
         )
         self.log(
             "train/disc_lr",
@@ -296,7 +295,7 @@ class TrainModule(L.LightningModule):
             on_step=True,
             on_epoch=False,
             prog_bar=True,
-            batch_size=bs,
+            # batch_size=bs,
         )
 
     def on_train_start(self):
@@ -342,7 +341,6 @@ class TrainModule(L.LightningModule):
             self.balancer = Balancer(weights=self.weights)
 
     def on_validation_epoch_end(self):
-        # TODO: save a few samples
         if self.trainer.sanity_checking:
             return
         if not self.trainer.is_global_zero:
@@ -350,12 +348,9 @@ class TrainModule(L.LightningModule):
         self._save_generated_audio()
 
     def _save_generated_audio(self):
-        batch = next(iter(self.trainer.val_dataloaders))
-        gens = (
-            self.generator.passthrough(batch["waveforms"].to(self.device))
-            .detach()
-            .cpu()
-        )
+        waveform = next(iter(self.trainer.val_dataloaders.dataset))["audio"]["array"]
+        waveforms = torch.tensor([waveform]).unsqueeze(0)  # add channel and batch dim
+        gens = self.generator.passthrough(waveforms.to(self.device)).detach().cpu()
         gens = [waveform for waveform in gens]
         path_to_save_dir = os.path.join(
             "./gen_samples",
