@@ -3,7 +3,9 @@ from typing import Any
 import hydra
 import lightning as L
 import torch
+import torch.distributed as dist
 from lightning.pytorch import seed_everything
+from lightning.pytorch.callbacks import TQDMProgressBar
 from omegaconf import DictConfig
 from torch import nn
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -13,9 +15,11 @@ from transformers import get_cosine_schedule_with_warmup
 from src.balancer import Balancer
 from src.dataset import AudioDataModule
 from src.loss import discriminator_loss, generator_loss
+from src.modules.discriminator import Discriminator, DiscriminatorConfig
+from src.modules.encodec import EncodecConfig, EncodecModel
 
 
-class EncodecModule(L.LightningModule):
+class TrainModule(L.LightningModule):
     def __init__(
         self,
         generator,
@@ -111,7 +115,7 @@ class EncodecModule(L.LightningModule):
         # discriminator step #
         d_opt.zero_grad(set_to_none=True)
         rand = torch.rand(size=(), device=waveforms.device)
-        # TODO: broadcast rand
+        dist.broadcast(rand, src=0)
 
         if rand < self.hparams.disc_update_prob:
             logits_real, logits_fake, _, _ = self.discriminator(
@@ -252,3 +256,22 @@ class EncodecModule(L.LightningModule):
 def main(cfg: DictConfig):
     seed_everything(seed=3407, workers=True)
     dm = AudioDataModule(**cfg.data)
+
+    encodec_cfg = EncodecConfig(**cfg.gen)
+    generator = EncodecModel(encodec_cfg)
+    discrim_cfg = DiscriminatorConfig(**cfg.disc)
+    discriminator = Discriminator(discrim_cfg)
+
+    model = TrainModule(generator, discriminator, **cfg.module)
+    trainer = L.Trainer(
+        # num_sanity_val_step=0,
+        enable_progress_bar=True,
+        check_val_every_n_epoch=None,
+        callbacks=[TQDMProgressBar(refresh_rate=400)],
+        **cfg.trainer,
+    )
+    trainer.fit(model, dm)
+
+
+if __name__ == "__main__":
+    main()
