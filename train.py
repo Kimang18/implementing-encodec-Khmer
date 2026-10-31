@@ -1,5 +1,6 @@
 import logging
 import os
+from contextlib import nullcontext
 from typing import Any
 
 import hydra
@@ -182,6 +183,12 @@ class TrainModule(L.LightningModule):
             )
         disc_loss = disc_loss / len(logits_real)
         return disc_loss
+
+    def _maybe_no_sync(self, sync: bool):
+        model = self.trainer.model  # DDP-wrapped under DDP, plain module otherwise
+        if sync or not hasattr(model, "no_sync"):
+            return nullcontext()
+        return model.no_sync()
 
     def training_step(self, batch: dict[str, Any], batch_idx: int):
         N = self.trainer.accumulate_grad_batches
