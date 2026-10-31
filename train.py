@@ -304,6 +304,20 @@ class TrainModule(L.LightningModule):
             prog_bar=True,
             # batch_size=bs,
         )
+        self.log(
+            "train/batch/batch_idx",
+            batch_idx,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+        )
+        self.log(
+            "train/batch/fit_batch_idx",
+            self.trainer.fit_loop.epoch_loop.total_batch_idx,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+        )
 
     def on_train_start(self):
         # self.train_loss.reset()
