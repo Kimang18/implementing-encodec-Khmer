@@ -125,7 +125,7 @@ class TrainModule(L.LightningModule):
             output_mel = torch.log10(torch.clamp(output_mel, min=1e-5))
 
             frequency_loss = (
-                frequency_loss + F.smooth_l1_loss(input_mel, output_mel)
+                frequency_loss + F.smooth_l1_loss(input_mel, output_mel, beta=0.5)
                 # + F.mse_loss(input_mel, output_mel)
             )
         frequency_loss = frequency_loss / len(self.ffts)
