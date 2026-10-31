@@ -61,6 +61,7 @@ class TrainModule(L.LightningModule):
         self.save_hyperparameters(ignore=["generator", "discriminator"])
         self.generator = generator
         self.discriminator = discriminator
+        self.discrim_batch_count = 0
         self.weights = {
             "time_loss": time_loss_lambda,
             "frequency_loss": frequency_loss_lambda,
@@ -220,13 +221,13 @@ class TrainModule(L.LightningModule):
             self.manual_backward(
                 self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
             )
-        # clip gradient norm
-        self.clip_gradients(
-            g_opt,
-            gradient_clip_val=self.hparams.max_grad_norm,
-            gradient_clip_algorithm="norm",
-        )
         if (batch_idx + 1) % N == 0:
+            # clip gradient norm
+            self.clip_gradients(
+                g_opt,
+                gradient_clip_val=self.hparams.max_grad_norm,
+                gradient_clip_algorithm="norm",
+            )
             g_opt.step()
             g_opt.zero_grad(set_to_none=True)
             g_sch.step()
@@ -243,16 +244,18 @@ class TrainModule(L.LightningModule):
             disc_loss = self._compute_discriminator_loss(logits_real, logits_fake)
             disc_loss = disc_loss / N  # scale for N gradient accumulation
             self.manual_backward(disc_loss)
-            # clip gradient norm
-            self.clip_gradients(
-                d_opt,
-                gradient_clip_val=self.hparams.max_grad_norm,
-                gradient_clip_algorithm="norm",
-            )
-            if (batch_idx + 1) % N == 0:
+            if (self.discrim_batch_count + 1) % N == 0:
+                # clip gradient norm
+                self.clip_gradients(
+                    d_opt,
+                    gradient_clip_val=self.hparams.max_grad_norm,
+                    gradient_clip_algorithm="norm",
+                )
                 d_opt.step()
                 d_opt.zero_grad(set_to_none=True)
-                d_sch.step()
+                self.discrim_batch_count = 0
+            else:
+                self.discrim_batch_count += 1
             self.log(
                 "train/loss/discrim_loss",
                 disc_loss,
@@ -261,10 +264,9 @@ class TrainModule(L.LightningModule):
                 prog_bar=True,
                 # batch_size=bs,
             )
-        else:
-            if (batch_idx + 1) % N == 0:
-                d_sch.step()
-                d_opt.zero_grad(set_to_none=True)
+        if (batch_idx + 1) % N == 0:
+            # move scheduler every N batches
+            d_sch.step()
 
         # for name, loss in losses.items():
         #     self.train_components[name].update(loss, weight=bs)
