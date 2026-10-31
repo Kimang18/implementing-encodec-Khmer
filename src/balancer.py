@@ -4,10 +4,10 @@ import torch
 import torch.distributed as dist
 
 
-def average_metrics_across_gpus(metrics, count=1):
+def average_metrics_across_gpus(metrics, count=1, device="cuda"):
     if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
         keys, values = zip(*metrics.items())
-        device = values[0].device
+        device = values[0]
         # tensor = [v1, v2, ..., count]
         tensor = torch.tensor(
             list(values) + [count], dtype=torch.float32, device=device
@@ -66,6 +66,7 @@ class Balancer:
         eps=1e-12,
         max_scale=100,
         min_scale=0.01,
+        device="cuda",
     ):
         self.weights = weights
         self.total_norm = total_norm
@@ -77,6 +78,7 @@ class Balancer:
     def backward(self, losses, input, retain_graph=False):
         norms = {}
         grads = {}
+        device = input.device
 
         for name, loss in losses.items():
             grad, *_ = torch.autograd.grad(
@@ -97,7 +99,7 @@ class Balancer:
                 norms[name] = None
                 grads[name] = None
 
-        avg_norms = average_metrics_across_gpus(self.averager(norms), count)
+        avg_norms = average_metrics_across_gpus(self.averager(norms), count, device)
 
         total_weights = sum([self.weights[k] for k in avg_norms])
         ratios = {k: w / total_weights for (k, w) in self.weights.items()}
