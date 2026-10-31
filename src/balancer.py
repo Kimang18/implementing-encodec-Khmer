@@ -7,7 +7,6 @@ import torch.distributed as dist
 def average_metrics_across_gpus(metrics, count=1, device="cuda"):
     if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
         keys, values = zip(*metrics.items())
-        device = values[0]
         # tensor = [v1, v2, ..., count]
         tensor = torch.tensor(
             list(values) + [count], dtype=torch.float32, device=device
