@@ -109,10 +109,9 @@ class Balancer:
             scale = ratios[name] * self.total_norm / (self.eps + avg_norm)
             scale = max(self.min_scale, min(scale, self.max_scale))
             if grads[name] is not None:
-                grad = grads[name] * scale
-                out_grad += grad
+                out_grad += grads[name] * scale
 
-        input.backward(out_grad, retain_graph=retain_graph)
+        return out_grad
 
     def state_dict(self):
         """save the state dict"""

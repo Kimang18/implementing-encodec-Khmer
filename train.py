@@ -185,6 +185,7 @@ class TrainModule(L.LightningModule):
 
     def training_step(self, batch: dict[str, Any], batch_idx: int):
         N = self.trainer.accumulate_grad_batches
+        g_opt_take_step = (batch_idx + 1) % N == 0
         g_opt, d_opt = self.optimizers()
         g_sch, d_sch = self.lr_schedulers()
 
@@ -192,6 +193,7 @@ class TrainModule(L.LightningModule):
         # bs = len(waveforms)
 
         # generator step #
+        self.toggle_optimizer(g_opt)
         output = self.generator(waveforms)
         _, logits_fake, fmap_real, fmap_fake = self.discriminator(
             waveforms, output["decoded"]
@@ -209,19 +211,20 @@ class TrainModule(L.LightningModule):
             losses[name] = loss / N
         output["quantizer_loss"] = output["quantizer_loss"] / N
         if not self.hparams.use_balancer:
-            total_gen_loss = sum(
-                loss * self.weights[name] for name, loss in losses.items()
+            surrogate = (
+                sum(loss * self.weights[name] for name, loss in losses.items())
+                + self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
             )
-            total_gen_loss += (
-                self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
-            )
-            self.manual_backward(total_gen_loss)
         else:
-            self.balancer.backward(losses, output["decoded"], retain_graph=True)
-            self.manual_backward(
-                self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
+            out_grad = self.balancer.backward(
+                losses, output["decoded"], retain_graph=True
             )
-        if (batch_idx + 1) % N == 0:
+            surrogate = (
+                output["decoded"] * out_grad.detach()
+            ).sum() + self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
+        with self._maybe_no_sync(g_opt_take_step):
+            self.manual_backward(surrogate / N)
+        if g_opt_take_step:
             # clip gradient norm
             self.clip_gradients(
                 g_opt,
@@ -231,8 +234,10 @@ class TrainModule(L.LightningModule):
             g_opt.step()
             g_opt.zero_grad(set_to_none=True)
             g_sch.step()
+        self.untoggle_optimizer(g_opt)
 
         # discriminator step #
+        self.toggle_optimizer(d_opt)
         rand = torch.rand(size=(), device=waveforms.device)
         if dist.is_available() and dist.is_initialized():
             dist.broadcast(rand, src=0)
@@ -242,9 +247,10 @@ class TrainModule(L.LightningModule):
                 waveforms, output["decoded"].detach()
             )
             disc_loss = self._compute_discriminator_loss(logits_real, logits_fake)
-            disc_loss = disc_loss / N  # scale for N gradient accumulation
-            self.manual_backward(disc_loss)
-            if (self.discrim_batch_count + 1) % N == 0:
+            d_opt_take_step = (self.discrim_batch_count + 1) % N == 0
+            with self._maybe_no_sync(d_opt_take_step):
+                self.manual_backward(disc_loss / N)  # scale for N gradient accumulation
+            if d_opt_take_step:
                 # clip gradient norm
                 self.clip_gradients(
                     d_opt,
@@ -264,7 +270,8 @@ class TrainModule(L.LightningModule):
                 prog_bar=True,
                 # batch_size=bs,
             )
-        if (batch_idx + 1) % N == 0:
+        self.untoggle_optimizer(d_opt)
+        if g_opt_take_step:
             # move scheduler every N batches
             d_sch.step()
 
