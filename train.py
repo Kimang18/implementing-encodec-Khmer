@@ -32,6 +32,13 @@ def make_buffers_non_persistent(module: nn.Module):
         m._non_persistent_buffers_set.update(m._buffers.keys())
 
 
+class JupyterNoProgressBar(TQDMProgressBar):
+    def init_validation_tqdm(self):
+        bar = super().init_validation_tqdm()
+        bar.disable = True  # Turns off the validation progress bar completely
+        return bar
+
+
 class TrainModule(L.LightningModule):
     def __init__(
         self,
@@ -176,6 +183,7 @@ class TrainModule(L.LightningModule):
         return disc_loss
 
     def training_step(self, batch: dict[str, Any], batch_idx: int):
+        N = self.trainer.accumulate_grad_batches
         g_opt, d_opt = self.optimizers()
         g_sch, d_sch = self.lr_schedulers()
 
@@ -183,8 +191,6 @@ class TrainModule(L.LightningModule):
         # bs = len(waveforms)
 
         # generator step #
-        g_opt.zero_grad(set_to_none=True)
-
         output = self.generator(waveforms)
         _, logits_fake, fmap_real, fmap_fake = self.discriminator(
             waveforms, output["decoded"]
@@ -197,6 +203,10 @@ class TrainModule(L.LightningModule):
             waveforms,
             output["decoded"],
         )
+        # scale losses by 1/N for N batches of gradient accumulation
+        for name, loss in losses.items():
+            losses[name] = loss / N
+        output["quantizer_loss"] = output["quantizer_loss"] / N
         if not self.hparams.use_balancer:
             total_gen_loss = sum(
                 loss * self.weights[name] for name, loss in losses.items()
@@ -216,12 +226,12 @@ class TrainModule(L.LightningModule):
             gradient_clip_val=self.hparams.max_grad_norm,
             gradient_clip_algorithm="norm",
         )
-        if (batch_idx + 1) % self.trainer.accumulate_grad_batches == 0:
+        if (batch_idx + 1) % N == 0:
             g_opt.step()
+            g_opt.zero_grad(set_to_none=True)
             g_sch.step()
 
         # discriminator step #
-        d_opt.zero_grad(set_to_none=True)
         rand = torch.rand(size=(), device=waveforms.device)
         if dist.is_available() and dist.is_initialized():
             dist.broadcast(rand, src=0)
@@ -231,6 +241,7 @@ class TrainModule(L.LightningModule):
                 waveforms, output["decoded"].detach()
             )
             disc_loss = self._compute_discriminator_loss(logits_real, logits_fake)
+            disc_loss = disc_loss / N  # scale for N gradient accumulation
             self.manual_backward(disc_loss)
             # clip gradient norm
             self.clip_gradients(
@@ -238,11 +249,12 @@ class TrainModule(L.LightningModule):
                 gradient_clip_val=self.hparams.max_grad_norm,
                 gradient_clip_algorithm="norm",
             )
-            if (batch_idx + 1) % self.trainer.accumulate_grad_batches == 0:
+            if (batch_idx + 1) % N == 0:
                 d_opt.step()
+                d_opt.zero_grad(set_to_none=True)
                 d_sch.step()
             self.log(
-                "train/discrim_loss",
+                "train/loss/discrim_loss",
                 disc_loss,
                 on_step=True,
                 on_epoch=False,
@@ -250,15 +262,16 @@ class TrainModule(L.LightningModule):
                 # batch_size=bs,
             )
         else:
-            if (batch_idx + 1) % self.trainer.accumulate_grad_batches == 0:
+            if (batch_idx + 1) % N == 0:
                 d_sch.step()
+                d_opt.zero_grad(set_to_none=True)
 
         # for name, loss in losses.items():
         #     self.train_components[name].update(loss, weight=bs)
         # self.train_components["quantizer_loss"].update(output["quantizer_loss"])
         for name, loss in losses.items():
             self.log(
-                f"train/{name}",
+                f"train/loss/{name}",
                 loss,
                 on_step=True,
                 on_epoch=False,
@@ -266,7 +279,7 @@ class TrainModule(L.LightningModule):
                 # batch_size=bs,
             )
         self.log(
-            "train/quantizer_loss",
+            "train/loss/quantizer_loss",
             output["quantizer_loss"],
             on_step=True,
             on_epoch=False,
@@ -274,7 +287,7 @@ class TrainModule(L.LightningModule):
             # batch_size=bs,
         )
         self.log(
-            "train/gen_lr",
+            "train/lr/gen_lr",
             g_sch.get_last_lr()[0],
             on_step=True,
             on_epoch=False,
@@ -282,7 +295,7 @@ class TrainModule(L.LightningModule):
             # batch_size=bs,
         )
         self.log(
-            "train/disc_lr",
+            "train/lr/disc_lr",
             d_sch.get_last_lr()[0],
             on_step=True,
             on_epoch=False,
@@ -410,7 +423,7 @@ def main(cfg: DictConfig):
         # num_sanity_val_step=0,
         enable_progress_bar=True,
         check_val_every_n_epoch=None,
-        callbacks=[TQDMProgressBar(refresh_rate=50)],
+        callbacks=[JupyterNoProgressBar(refresh_rate=50)],
         **cfg.trainer,
     )
     trainer.fit(model, dm)
