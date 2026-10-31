@@ -64,7 +64,8 @@ module:
 
 trainer:
     val_check_interval: 1000
-    max_steps: 10000
-    max_epochs: -1
+    limit_train_batches: 10000
+    max_steps: -1
+    max_epochs: 1
     accumulate_grad_batches: 1
     accelerator: "cuda"
