@@ -213,10 +213,6 @@ class TrainModule(L.LightningModule):
             waveforms,
             output["decoded"],
         )
-        # scale losses by 1/N for N batches of gradient accumulation
-        for name, loss in losses.items():
-            losses[name] = loss / N
-        output["quantizer_loss"] = output["quantizer_loss"] / N
         if not self.hparams.use_balancer:
             surrogate = (
                 sum(loss * self.weights[name] for name, loss in losses.items())
