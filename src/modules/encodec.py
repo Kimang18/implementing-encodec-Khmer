@@ -108,7 +108,7 @@ class EnCodecModel(nn.Module):
 
     def _is_distributed(self):
         return (
-            dist.is_available() and dist.is_initialized() and dist.get_world_rank() > 1
+            dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1
         )
 
     def normalize(self, x):
