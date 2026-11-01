@@ -88,12 +88,12 @@ class Balancer:
                 dims = tuple(range(1, grad.dim()))
                 norm = grad.norm(dim=dims)  # (batch, )
 
-                norm = norm.sum()  # (1, )
+                norm = norm.mean()  # (1, )
 
                 norms[name] = norm
                 grads[name] = grad
 
-                count = len(grad)
+                count = 1  # len(grad)
             else:
                 norms[name] = None
                 grads[name] = None
