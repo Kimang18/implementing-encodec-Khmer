@@ -60,6 +60,10 @@ def kmeans(samples, n_clusters, n_iters):
 
 
 class EuclideanCodebook(nn.Module):
+    """
+    Quantization using Kmeans algorithm
+    Handle quantization, updating centroids and cluster size, and communication across multiple GPU"""
+
     def __init__(
         self,
         dim,
@@ -164,15 +168,15 @@ class EuclideanCodebook(nn.Module):
         return einops.rearrange(x, "... d -> (...) d")
 
     def quantize(self, x):
-        # (n, d) -> (d, n)
+        # (k, d) -> (d, k)
         embed = self.embed.t()
 
         # compute distance between each x and embeddings
         dists = -1 * (
-            x.pow(2).sum(1, keepdim=True)
-            - 2 * x @ embed
-            + embed.pow(2).sum(0, keepdim=True)
-        )
+            x.pow(2).sum(1, keepdim=True)  # (n, 1)
+            - 2 * x @ embed  # (n, k)
+            + embed.pow(2).sum(0, keepdim=True)  # (1, k)
+        )  # (n, k)
         embed_ind = dists.max(dim=-1).indices
 
         return embed_ind
@@ -260,7 +264,7 @@ class EuclideanCodebook(nn.Module):
 
 
 class VectorQuantization(nn.Module):
-    """Standard VQ method"""
+    """Standard VQ handle dimension alignment (compress or expand input dim to codebook dim), compute commitment loss, and state-through estimator"""
 
     def __init__(
         self,
@@ -330,10 +334,9 @@ class VectorQuantization(nn.Module):
             quantize = x + (quantize - x).detach()
 
         loss = torch.tensor([0.0], device=device, requires_grad=self.training)
-        if self.training:
-            if self.commitment_weight > 0:
-                commit_loss = F.mse_loss(quantize.detach(), x)
-                loss = loss + commit_loss * self.commitment_weight
+        if self.training and self.commitment_weight > 0:
+            commit_loss = F.mse_loss(quantize.detach(), x)
+            loss = loss + commit_loss * self.commitment_weight
 
         quantize = self.proj_out(quantize)
         quantize = einops.rearrange(quantize, "b n d -> b d n")
