@@ -206,7 +206,7 @@ class TrainModule(L.LightningModule):
             print(
                 f"rank={self.global_rank} wolrd={self.trainer.world_size} "
                 f"dev={self.device} bs={x.shape[0]} "
-                f"checksum={x.float().sum.item():.4f}",
+                f"checksum={x.float().sum().item():.4f}",
                 flush=True,
             )
 
