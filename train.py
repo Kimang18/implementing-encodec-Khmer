@@ -190,7 +190,25 @@ class TrainModule(L.LightningModule):
             return nullcontext()
         return model.no_sync()
 
+    @torch.no_grad()
+    def _check_sync(self):
+        p = next(self.parameters()).flatten()[:1000].clone()
+        ref = p.clone()
+        dist.broadcast(ref, src=0)
+        print(
+            f"rank {self.global_rank} max diff vs rank0: {(p - ref).abs().max().item()}"
+        )
+
     def training_step(self, batch: dict[str, Any], batch_idx: int):
+        if batch_idx < 3:
+            x = batch["waveforms"][0]
+            print(
+                f"rank={self.global_rank} wolrd={self.trainer.world_size} "
+                f"dev={self.device} bs={x.shape[0]} "
+                f"checksum={x.float().sum.item():.4f}",
+                flush=True,
+            )
+
         N = self.trainer.accumulate_grad_batches
         g_opt_take_step = (batch_idx + 1) % N == 0
         g_opt, d_opt = self.optimizers()
