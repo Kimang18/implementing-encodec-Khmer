@@ -33,8 +33,8 @@ def averager(beta=1.0, state=None):
 
         for key, value in metrics.items():
             if value is not None:
-                total[key] = total[key] * beta + float(value) * (1 - beta)
-                fix[key] = fix[key] * beta + (1 - beta)
+                total[key] = total[key] * beta + float(value)
+                fix[key] = fix[key] * beta + 1
         return {
             key: (tot / fix[key] if tot is not None else None)
             for key, tot in total.items()
@@ -98,7 +98,7 @@ class Balancer:
                 norms[name] = None
                 grads[name] = None
 
-        avg_norms = average_metrics_across_gpus(self.averager(norms), count, device)
+        avg_norms = self.averager(average_metrics_across_gpus(norms, count, device))
 
         total_weights = sum([self.weights[k] for k in avg_norms])
         ratios = {k: w / total_weights for (k, w) in self.weights.items()}
