@@ -253,6 +253,10 @@ class TrainModule(L.LightningModule):
                 waveforms, output["decoded"].detach()
             )
             disc_loss = self._compute_discriminator_loss(logits_real, logits_fake)
+            # avoid unused_parameter when doing ddp strategy
+            disc_loss = disc_loss + sum(
+                [(0.0 * p).sum() for p in self.generator.parameters()]
+            )
             d_opt_take_step = (self.discrim_batch_count + 1) % N == 0
             with self._maybe_no_sync(d_opt_take_step):
                 # scale for N gradient accumulation
