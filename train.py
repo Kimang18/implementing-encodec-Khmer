@@ -201,6 +201,7 @@ class TrainModule(L.LightningModule):
 
     def training_step(self, batch: dict[str, Any], batch_idx: int):
         if batch_idx < 3:
+            self._check_sync()
             x = batch["waveforms"][0]
             print(
                 f"rank={self.global_rank} wolrd={self.trainer.world_size} "
