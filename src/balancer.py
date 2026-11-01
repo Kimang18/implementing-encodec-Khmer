@@ -33,8 +33,8 @@ def averager(beta=1.0, state=None):
 
         for key, value in metrics.items():
             if value is not None:
-                total[key] = total[key] * beta + float(value)
-                fix[key] = fix[key] * beta + 1
+                total[key] = total[key] * beta + float(value) * (1 - beta)
+                fix[key] = fix[key] * beta + (1 - beta)
         return {
             key: (tot / fix[key] if tot is not None else None)
             for key, tot in total.items()
@@ -88,12 +88,12 @@ class Balancer:
                 dims = tuple(range(1, grad.dim()))
                 norm = grad.norm(dim=dims)  # (batch, )
 
-                norm = norm.mean()  # (1, )
+                norm = norm.sum()  # (1, )
 
                 norms[name] = norm
                 grads[name] = grad
 
-                count = 1  # len(grad)
+                count = len(grad)
             else:
                 norms[name] = None
                 grads[name] = None
