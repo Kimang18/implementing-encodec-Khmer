@@ -190,26 +190,7 @@ class TrainModule(L.LightningModule):
             return nullcontext()
         return model.no_sync()
 
-    @torch.no_grad()
-    def _check_sync(self):
-        p = next(self.parameters()).flatten()[:1000].clone()
-        ref = p.clone()
-        dist.broadcast(ref, src=0)
-        print(
-            f"rank {self.global_rank} max diff vs rank0: {(p - ref).abs().max().item()}"
-        )
-
     def training_step(self, batch: dict[str, Any], batch_idx: int):
-        # if batch_idx < 3:
-        #     self._check_sync()
-        #     x = batch["waveforms"]
-        #     print(
-        #         f"rank={self.global_rank} wolrd={self.trainer.world_size} "
-        #         f"dev={self.device} bs={x.shape[0]} "
-        #         f"checksum={x.float().sum().item():.4f}",
-        #         flush=True,
-        #     )
-
         N = self.trainer.accumulate_grad_batches
         g_opt_take_step = (batch_idx + 1) % N == 0
         g_opt, d_opt = self.optimizers()
@@ -243,8 +224,6 @@ class TrainModule(L.LightningModule):
             surrogate = (
                 output["decoded"] * out_grad.detach()
             ).sum() + self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
-        # avoid unused_parameter when doing ddp strategy
-        surrogate = surrogate + sum([(0.0 * p).sum() for p in self.parameters()])
         with self._maybe_no_sync(g_opt_take_step):
             self.manual_backward(surrogate / N)
         if g_opt_take_step:
@@ -270,8 +249,6 @@ class TrainModule(L.LightningModule):
                 waveforms, output["decoded"].detach()
             )
             disc_loss = self._compute_discriminator_loss(logits_real, logits_fake)
-            # avoid unused_parameter when doing ddp strategy
-            disc_loss = disc_loss + sum([(0.0 * p).sum() for p in self.parameters()])
             d_opt_take_step = (self.discrim_batch_count + 1) % N == 0
             with self._maybe_no_sync(d_opt_take_step):
                 # scale for N gradient accumulation
