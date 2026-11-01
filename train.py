@@ -121,9 +121,9 @@ class TrainModule(L.LightningModule):
         frequency_loss = 0.0
         for fft in self.ffts:
             input_mel = fft(input_wav)
-            input_mel = torch.log10(torch.clamp(input_mel, min=1e-5))
+            input_mel = torch.log10(torch.clamp(input_mel, min=1e-10))
             output_mel = fft(output_wav)
-            output_mel = torch.log10(torch.clamp(output_mel, min=1e-5))
+            output_mel = torch.log10(torch.clamp(output_mel, min=1e-10))
 
             frequency_loss = (
                 frequency_loss + F.smooth_l1_loss(input_mel, output_mel, beta=0.5)
@@ -197,7 +197,6 @@ class TrainModule(L.LightningModule):
         g_sch, d_sch = self.lr_schedulers()
 
         waveforms = batch["waveforms"]
-        # bs = len(waveforms)
 
         # generator step #
         self.toggle_optimizer(g_opt)
@@ -225,6 +224,10 @@ class TrainModule(L.LightningModule):
             surrogate = (
                 output["decoded"] * out_grad.detach()
             ).sum() + self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
+        # avoid unused_parameter when doing ddp strategy
+        surrogate = surrogate + sum(
+            [(0.0 * p).sum() for p in self.discriminator.parameters()]
+        )
         with self._maybe_no_sync(g_opt_take_step):
             self.manual_backward(surrogate / N)
         if g_opt_take_step:
@@ -252,7 +255,8 @@ class TrainModule(L.LightningModule):
             disc_loss = self._compute_discriminator_loss(logits_real, logits_fake)
             d_opt_take_step = (self.discrim_batch_count + 1) % N == 0
             with self._maybe_no_sync(d_opt_take_step):
-                self.manual_backward(disc_loss / N)  # scale for N gradient accumulation
+                # scale for N gradient accumulation
+                self.manual_backward(disc_loss / N)
             if d_opt_take_step:
                 # clip gradient norm
                 self.clip_gradients(
@@ -334,17 +338,17 @@ class TrainModule(L.LightningModule):
         self.val_loss.reset()
 
     def validation_step(self, batch: dict[str, Any], batch_idx: int):
-        # bs = len(batch["waveforms"])
-        output = self.generator(batch["waveforms"])
+        waveforms = batch["waveforms"]
+        output = self.generator(waveforms)
         _, logits_fake, fmap_real, fmap_fake = self.discriminator(
-            batch["waveforms"], output["decoded"]
+            waveforms, output["decoded"]
         )
 
         losses = self._compute_generator_loss(
             fmap_real,
             fmap_fake,
             logits_fake,
-            batch["waveforms"],
+            waveforms,
             output["decoded"],
         )
         total_gen_loss = sum(loss * self.weights[name] for name, loss in losses.items())
@@ -352,13 +356,12 @@ class TrainModule(L.LightningModule):
 
         self.val_loss.update(
             total_gen_loss,
-            # weight=bs,
         )
         self.log(
             "val/loss_total", self.val_loss, on_step=False, on_epoch=True, prog_bar=True
         )
         for name, metric in self.val_components.items():
-            metric.update(losses[name])  # , weight=bs)
+            metric.update(losses[name])
 
         for name, metric in self.val_components.items():
             self.log(f"val/{name}", metric, on_step=False, on_epoch=True)
