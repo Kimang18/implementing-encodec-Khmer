@@ -197,6 +197,7 @@ class TrainModule(L.LightningModule):
         g_sch, d_sch = self.lr_schedulers()
 
         waveforms = batch["waveforms"]
+        bs = len(waveforms)
 
         # generator step #
         self.toggle_optimizer(g_opt)
@@ -271,7 +272,7 @@ class TrainModule(L.LightningModule):
                 on_step=True,
                 on_epoch=False,
                 prog_bar=True,
-                # batch_size=bs,
+                batch_size=bs,
             )
         self.untoggle_optimizer(d_opt)
         if g_opt_take_step:
@@ -288,7 +289,7 @@ class TrainModule(L.LightningModule):
                 on_step=True,
                 on_epoch=False,
                 prog_bar=True,
-                # batch_size=bs,
+                batch_size=bs,
             )
         self.log(
             "train/loss/quantizer_loss",
@@ -296,7 +297,7 @@ class TrainModule(L.LightningModule):
             on_step=True,
             on_epoch=False,
             prog_bar=True,
-            # batch_size=bs,
+            batch_size=bs,
         )
         self.log(
             "train/lr/gen_lr",
@@ -304,7 +305,7 @@ class TrainModule(L.LightningModule):
             on_step=True,
             on_epoch=False,
             prog_bar=True,
-            # batch_size=bs,
+            batch_size=bs,
         )
         self.log(
             "train/lr/disc_lr",
@@ -312,21 +313,7 @@ class TrainModule(L.LightningModule):
             on_step=True,
             on_epoch=False,
             prog_bar=True,
-            # batch_size=bs,
-        )
-        self.log(
-            "train/batch/batch_idx",
-            batch_idx,
-            on_step=True,
-            on_epoch=False,
-            prog_bar=True,
-        )
-        self.log(
-            "train/batch/fit_batch_idx",
-            self.trainer.fit_loop.epoch_loop.total_batch_idx,
-            on_step=True,
-            on_epoch=False,
-            prog_bar=True,
+            batch_size=bs,
         )
 
     def on_train_start(self):
@@ -335,6 +322,7 @@ class TrainModule(L.LightningModule):
 
     def validation_step(self, batch: dict[str, Any], batch_idx: int):
         waveforms = batch["waveforms"]
+        bs = len(waveforms)
         output = self.generator(waveforms)
         _, logits_fake, fmap_real, fmap_fake = self.discriminator(
             waveforms, output["decoded"]
@@ -354,13 +342,18 @@ class TrainModule(L.LightningModule):
             total_gen_loss,
         )
         self.log(
-            "val/loss_total", self.val_loss, on_step=False, on_epoch=True, prog_bar=True
+            "val/loss_total",
+            self.val_loss,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=bs,
         )
         for name, metric in self.val_components.items():
             metric.update(losses[name])
 
         for name, metric in self.val_components.items():
-            self.log(f"val/{name}", metric, on_step=False, on_epoch=True)
+            self.log(f"val/{name}", metric, on_step=False, on_epoch=True, batch_size=bs)
 
     def setup(self, stage: str):
         if self.hparams.compile and stage == "fit":
@@ -417,7 +410,7 @@ class TrainModule(L.LightningModule):
             betas=(0.5, 0.9),
         )
         optimizer_steps = int(
-            self.trainer.max_steps / self.trainer.accumulate_grad_batches
+            self.trainer.limit_train_batches / self.trainer.accumulate_grad_batches
         )
         warmup_steps = int(0.05 * optimizer_steps)
         G_scheduler = get_cosine_schedule_with_warmup(
