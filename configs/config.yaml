@@ -60,6 +60,7 @@ module:
     feature_loss_lambda: 3.0
     quantizer_loss_lambda: 1.0
     use_balancer: true
+    skip_reconstruction_loss: false
     compile: false
 
 trainer:

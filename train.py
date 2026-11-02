@@ -56,6 +56,7 @@ class TrainModule(L.LightningModule):
         feature_loss_lambda=3.0,
         quantizer_loss_lambda=3.0,
         use_balancer=True,
+        skip_reconstruction_loss=True,
         compile=False,
     ):
         super().__init__()
@@ -213,14 +214,23 @@ class TrainModule(L.LightningModule):
             waveforms,
             output["decoded"],
         )
+        if self.hparams.skip_reconstruction_loss:
+            effective_losses = {
+                "feature_loss": losses["feature_loss"],
+                "generator_loss": losses["generator_loss"],
+            }
+        else:
+            effective_losses = losses
         if not self.hparams.use_balancer:
             surrogate = (
-                sum(loss * self.weights[name] for name, loss in losses.items())
+                sum(
+                    loss * self.weights[name] for name, loss in effective_losses.items()
+                )
                 + self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
             )
         else:
             out_grad = self.balancer.backward(
-                losses, output["decoded"], retain_graph=True
+                effective_losses, output["decoded"], retain_graph=True
             )
             surrogate = (
                 output["decoded"] * out_grad.detach()
