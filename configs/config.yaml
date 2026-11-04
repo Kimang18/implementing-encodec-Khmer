@@ -1,5 +1,5 @@
 data:
-    hf_repo: "Kimang18/compact-DDD-Cambodia-khmer-speech-dataset-v0-2-0"
+    hf_repo: "Digital-Divide-Data/khmer-speech-dataset"
     segment_length: 16000
     bs_per_device: 32
     n_worker_per_device: 0
