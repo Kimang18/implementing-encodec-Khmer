@@ -384,6 +384,12 @@ class TrainModule(L.LightningModule):
         waveform = next(iter(self.trainer.val_dataloaders.dataset))["audio"]["array"]
         waveforms = torch.tensor([waveform]).unsqueeze(0)  # add channel and batch dim
         gens = self.generator.passthrough(waveforms.to(self.device)).detach().cpu()
+        self.logger.experiment.add_audio(
+            "val/gen_audio",
+            gens.squeeze().numpy(),
+            global_step=self.global_step,
+            sample_rate=self.hparams.sample_rate,
+        )
         gens = [waveform for waveform in gens]
         path_to_save_dir = os.path.join(
             "./gen_samples",
