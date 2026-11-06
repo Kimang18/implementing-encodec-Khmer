@@ -58,21 +58,26 @@ class ResidualVectorQuantization(nn.Module):
 
     @torch.no_grad()
     def encode(self, x, n_q: int | None = None):
-        residual = x
+        batch_size, channels, seq_len = x.shape
+        residual = einops.rearrange(x, "b d n -> (b n) d")
         codes = []
 
-        n_q = n_q or len(self.layers)
+        n_q = n_q or len(self.quantizers)
         for quantizer in self.quantizers[:n_q]:
             code = quantizer.code_lookup(residual)
             quantize = quantizer.get_codebook_entry(code)
             residual = residual - quantize
             codes.append(code)
 
-        out_codes = torch.stack(codes)
+        out_codes = torch.stack(codes)  # (n_q, batch_size * seq_len)
+        out_codes = out_codes.reshape(
+            n_q, batch_size, seq_len
+        )  # (n_q, batch_size, seq_len)
         return out_codes
 
     @torch.no_grad()
     def decode(self, q_indices):
+        # q_indices: (n_codebook, batch_size, seq_len)
         quantize_out = torch.tensor(0.0, device=q_indices.device)
 
         for i, indices in enumerate(q_indices):
@@ -80,11 +85,15 @@ class ResidualVectorQuantization(nn.Module):
             quantize = quantizer.get_codebook_entry(indices)
             quantize_out = quantize_out + quantize
 
+        quantize_out = self.proj_out(quantize_out)
+        quantize_out = einops.rearrange(quantize_out, "b n d -> b d n")
         return quantize_out
 
     def forward(self, x, n_q: int | None = None):
         # x: (b d n)
         x_e = einops.rearrange(x, "b d n -> (b n) d")
+        x_e = self.proj_in(x_e)
+
         quantized = torch.zeros_like(x_e)
         codes = []
         codebook_losses = 0
@@ -104,6 +113,7 @@ class ResidualVectorQuantization(nn.Module):
             codebook_losses += codebook_loss
             commit_losses += commit_loss
 
+        quantized = self.proj_out(quantized)
         quantized = quantized.reshape(x.shape)
         return (
             quantized,
