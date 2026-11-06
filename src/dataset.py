@@ -59,7 +59,7 @@ class AudioDataModule(L.LightningDataModule):
         ds = load_dataset(self.hparams.hf_repo, streaming=True)
         ds = ds.cast_column("audio", Audio(sampling_rate=self.hparams.sample_rate))
         self.ds_train = ds["train"]
-        self.ds_validation = ds["validation"]
+        self.ds_validation = ds["test"]
 
     def get_dataloader(self, dataset, batch_size, num_workers, shard_on_rank=True):
         def worker_init_fn(worker_id: int):
