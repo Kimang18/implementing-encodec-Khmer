@@ -281,7 +281,7 @@ class TrainModule(L.LightningModule):
                 disc_loss,
                 on_step=True,
                 on_epoch=False,
-                prog_bar=True,
+                prog_bar=False,
                 batch_size=bs,
             )
         self.untoggle_optimizer(d_opt)
@@ -314,7 +314,7 @@ class TrainModule(L.LightningModule):
             g_sch.get_last_lr()[0],
             on_step=True,
             on_epoch=False,
-            prog_bar=True,
+            prog_bar=False,
             batch_size=bs,
         )
         self.log(
@@ -322,7 +322,7 @@ class TrainModule(L.LightningModule):
             d_sch.get_last_lr()[0],
             on_step=True,
             on_epoch=False,
-            prog_bar=True,
+            prog_bar=False,
             batch_size=bs,
         )
 
