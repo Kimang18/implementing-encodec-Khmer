@@ -37,8 +37,8 @@ class VectorQuantizer(nn.Module):
     def forward(self, z):
         code = self.code_lookup(z)
         quantized = self.get_codebook_entry(code)
-        codebook_loss = F.mse_loss(quantized, z.detach())
-        commitment_loss = F.mse_loss(z, quantized.detach())
+        codebook_loss = (quantized - z.detach()).pow(2).mean(dim=0).sum()
+        commitment_loss = (z - quantized.detach()).pow(2).mean(di0=0).sum()
         return quantized, code, codebook_loss, commitment_loss
 
 
