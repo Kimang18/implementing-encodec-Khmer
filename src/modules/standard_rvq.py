@@ -118,7 +118,7 @@ class ResidualVectorQuantization(nn.Module):
         return (
             quantized,
             torch.stack(codes, dim=-1),
-            codebook_losses + self.commitment_weight * commit_losses,
+            codebook_losses / n_q + self.commitment_weight * commit_losses / n_q,
         )
 
 

@@ -153,7 +153,7 @@ class EnCodecModel(nn.Module):
         return {
             "encoder_out": encoded,
             "quantize": quantize_out,
-            "quantizer_loss": torch.mean(out_losses),
+            "quantizer_loss": out_losses,
             "decoded": decoded,
         }
 
