@@ -331,16 +331,27 @@ class TrainModule(L.LightningModule):
         total_gen_loss += self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
 
         self.log(
-            "val/loss_total",
+            "val/total_loss",
             total_gen_loss,
             on_step=False,
             on_epoch=True,
             prog_bar=True,
             batch_size=bs,
         )
-
-        for name, loss in losses.items():
-            self.log(f"val/{name}", loss, on_step=False, on_epoch=True, batch_size=bs)
+        self.log(
+            "val/frequency_loss",
+            losses["frequency_loss"],
+            on_step=False,
+            on_epoch=True,
+            batch_size=bs,
+        )
+        self.log(
+            "val/time_loss",
+            losses["time_loss"],
+            on_step=False,
+            on_epoch=True,
+            batch_size=bs,
+        )
 
     def setup(self, stage: str):
         if self.hparams.compile and stage == "fit":
