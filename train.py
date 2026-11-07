@@ -69,6 +69,8 @@ class TrainModule(L.LightningModule):
             "generator_loss": generator_loss_lambda,
             "feature_loss": feature_loss_lambda,
         }
+        if use_balancer:
+            self.balancer = Balancer(weights=self.weights)
 
         # different MelSpectrogram converters for generator_loss
         ffts = []
@@ -357,9 +359,6 @@ class TrainModule(L.LightningModule):
         if self.hparams.compile and stage == "fit":
             self.generator = torch.compile(self.generator, dynamic=True)
             self.discriminator = torch.compile(self.discriminator, dynamic=True)
-
-        if self.hparams.use_balancer:
-            self.balancer = Balancer(weights=self.weights)
 
     def on_validation_epoch_end(self):
         if self.trainer.sanity_checking:
