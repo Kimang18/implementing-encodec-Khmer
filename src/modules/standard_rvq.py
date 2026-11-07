@@ -9,24 +9,20 @@ class VectorQuantizer(nn.Module):
         super().__init__()
         self.codebook_size = codebook_size
         self.codebook_dim = codebook_size
-        # self.codebook = nn.Parameter(torch.Tensor(codebook_size, codebook_dim))
-        # nn.init.uniform_(self.codebook, -1 / codebook_dim, 1 / codebook_dim)
-        self.codebook = nn.Embedding(codebook_size, codebook_dim)
+        self.codebook = nn.Parameter(torch.Tensor(codebook_size, codebook_dim))
+        nn.init.uniform_(self.codebook, -1 / codebook_size, 1 / codebook_size)
 
     def get_codebook_entry(self, code):
-        # return F.embedding(code, self.codebook)
-        return self.codebook(code)
+        return F.embedding(code, self.codebook)
 
     def code_lookup(self, z):
         # z: (batch_size, codebook_dim)
-        q = F.normalize(
-            self.codebook.weight.t(), dim=0
-        )  # (codebook_dim, codebook_size)
+        q = F.normalize(self.codebook).t()  # (codebook_dim, codebook_size)
         z = F.normalize(z)
         dist = -1 * (
             z.pow(2).sum(dim=1, keepdim=True)
             + q.pow(2).sum(dim=0, keepdim=True)
-            + 2 * z @ q
+            - 2 * z @ q
         )
         return dist.max(dim=-1).indices
 
@@ -64,7 +60,7 @@ class ResidualVectorQuantization(nn.Module):
     @torch.no_grad()
     def encode(self, x, n_q: int | None = None):
         batch_size, channels, seq_len = x.shape
-        residual = einops.rearrange(x, "b d n -> (b n) d")
+        residual = einops.rearrange(x, "b d t -> (b t) d")
         codes = []
 
         n_q = n_q or len(self.quantizers)
@@ -76,7 +72,7 @@ class ResidualVectorQuantization(nn.Module):
 
         out_codes = torch.stack(codes)  # (n_q, batch_size * seq_len)
         out_codes = einops.rearrange(
-            out_codes, "q (b n) -> q b n", b=batch_size, n=seq_len
+            out_codes, "q (b t) -> q b t", b=batch_size, t=seq_len
         )
         return out_codes
 
@@ -91,13 +87,13 @@ class ResidualVectorQuantization(nn.Module):
             quantized_out = quantized_out + quantized
 
         quantized_out = self.proj_out(quantized_out)
-        quantized_out = einops.rearrange(quantized_out, "b n d -> b d n")
+        quantized_out = einops.rearrange(quantized_out, "b t d -> b d t")
         return quantized_out
 
     def forward(self, x, n_q: int | None = None):
         # x: (b d n)
         batch_size, channels, seq_len = x.shape
-        x_e = einops.rearrange(x, "b d n -> (b n) d")
+        x_e = einops.rearrange(x, "b d t -> (b t) d")
         x_e = self.proj_in(x_e)  # (batch_size * seq_len, codebook_dim)
 
         quantized = torch.zeros_like(x_e)
@@ -121,7 +117,7 @@ class ResidualVectorQuantization(nn.Module):
 
         quantized = self.proj_out(quantized)  # (batch_size * seq_len, dim)
         quantized = einops.rearrange(
-            quantized, "(b n) d -> b d n", b=batch_size, n=seq_len
+            quantized, "(b t) d -> b d t", b=batch_size, t=seq_len
         )
         return (
             quantized,
