@@ -14,7 +14,6 @@ from lightning.pytorch.callbacks import TQDMProgressBar
 from omegaconf import DictConfig
 from torch import nn
 from torchdata.stateful_dataloader import StatefulDataLoader
-from torchmetrics import MeanMetric
 from transformers import get_cosine_schedule_with_warmup
 
 from src.balancer import Balancer
@@ -70,16 +69,6 @@ class TrainModule(L.LightningModule):
             "generator_loss": generator_loss_lambda,
             "feature_loss": feature_loss_lambda,
         }
-        # self.train_loss = MeanMetric()
-        # self.train_components = nn.ModuleDict(
-        #     {name: MeanMetric() for name in self.weights}
-        # )
-        # for loss_name in ["quantizer_loss"]:
-        #     self.train_components[loss_name] = MeanMetric()
-        self.val_loss = MeanMetric()
-        self.val_components = nn.ModuleDict(
-            {"time_loss": MeanMetric(), "frequency_loss": MeanMetric()}
-        )
 
         # different MelSpectrogram converters for generator_loss
         ffts = []
@@ -289,9 +278,6 @@ class TrainModule(L.LightningModule):
             # move scheduler every N batches
             d_sch.step()
 
-        # for name, loss in losses.items():
-        #     self.train_components[name].update(loss, weight=bs)
-        # self.train_components["quantizer_loss"].update(output["quantizer_loss"])
         for name, loss in losses.items():
             self.log(
                 f"train/{name}",
@@ -326,10 +312,6 @@ class TrainModule(L.LightningModule):
             batch_size=bs,
         )
 
-    def on_train_start(self):
-        # self.train_loss.reset()
-        self.val_loss.reset()
-
     def validation_step(self, batch: dict[str, Any], batch_idx: int):
         waveforms = batch["waveforms"]
         bs = len(waveforms)
@@ -348,22 +330,17 @@ class TrainModule(L.LightningModule):
         total_gen_loss = sum(loss * self.weights[name] for name, loss in losses.items())
         total_gen_loss += self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
 
-        self.val_loss.update(
-            total_gen_loss,
-        )
         self.log(
             "val/loss_total",
-            self.val_loss,
+            total_gen_loss,
             on_step=False,
             on_epoch=True,
             prog_bar=True,
             batch_size=bs,
         )
-        for name, metric in self.val_components.items():
-            metric.update(losses[name])
 
-        for name, metric in self.val_components.items():
-            self.log(f"val/{name}", metric, on_step=False, on_epoch=True, batch_size=bs)
+        for name, loss in losses.items():
+            self.log(f"val/{name}", loss, on_step=False, on_epoch=True, batch_size=bs)
 
     def setup(self, stage: str):
         if self.hparams.compile and stage == "fit":
