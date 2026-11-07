@@ -44,7 +44,7 @@ class EnCodecConfig:
     kmeans_init: bool = True
     kmeans_iters: int = 50
     threshold_ema_dead_code: int = 2
-    commit_weight: float = 1
+    commitment_weight: float = 0.25
 
 
 class EnCodecModel(nn.Module):
@@ -83,7 +83,7 @@ class EnCodecModel(nn.Module):
             # kmeans_init=config.kmeans_init,
             # kmeans_iters=config.kmeans_iters,
             # threshold_ema_dead_code=config.threshold_ema_dead_code,
-            commitment_weight=config.commit_weight,
+            commitment_weight=config.commitment_weight,
         )
         self.decoder = SEANetDecoder(
             channels=config.channels,

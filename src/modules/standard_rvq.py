@@ -9,15 +9,20 @@ class VectorQuantizer(nn.Module):
         super().__init__()
         self.codebook_size = codebook_size
         self.codebook_dim = codebook_size
-        self.codebook = nn.Parameter(torch.Tensor(codebook_size, codebook_dim))
-        nn.init.uniform_(self.codebook, -1 / codebook_size, 1 / codebook_size)
+        # self.codebook = nn.Parameter(torch.Tensor(codebook_size, codebook_dim))
+        # nn.init.uniform_(self.codebook, -1 / codebook_dim, 1 / codebook_dim)
+        self.codebook = nn.Embedding(codebook_size, codebook_dim)
 
     def get_codebook_entry(self, code):
-        return F.embedding(code, self.codebook)
+        # return F.embedding(code, self.codebook)
+        return self.codebook(code)
 
     def code_lookup(self, z):
         # z: (batch_size, codebook_dim)
-        q = self.codebook.t()  # (codebook_dim, codebook_size)
+        q = F.normalize(
+            self.codebook.weight.t(), dim=0
+        )  # (codebook_dim, codebook_size)
+        z = F.normalize(z)
         dist = -1 * (
             z.pow(2).sum(dim=1, keepdim=True)
             + q.pow(2).sum(dim=0, keepdim=True)
@@ -28,8 +33,8 @@ class VectorQuantizer(nn.Module):
     def forward(self, z):
         code = self.code_lookup(z)
         quantized = self.get_codebook_entry(code)
-        codebook_loss = (quantized - z.detach()).pow(2).sum()
-        commit_loss = (z - quantized.detach()).pow(2).sum()
+        codebook_loss = F.mse_loss(quantized, z.detach())
+        commit_loss = F.mse_loss(z, quantized.detach())
         return quantized, code, codebook_loss, commit_loss
 
 
@@ -108,7 +113,7 @@ class ResidualVectorQuantization(nn.Module):
             quantized = quantized + x_q
 
             # compute residual
-            x_e = x_e - x_q.detach()
+            x_e = x_e - x_q
 
             codes.append(code)
             codebook_losses += codebook_loss
