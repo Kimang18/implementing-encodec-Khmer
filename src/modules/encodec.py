@@ -44,7 +44,7 @@ class EnCodecConfig:
     kmeans_init: bool = True
     kmeans_iters: int = 50
     threshold_ema_dead_code: int = 2
-    commitment_weight: float = 0.25
+    commitment_weight: float = 1.0
 
 
 class EnCodecModel(nn.Module):
