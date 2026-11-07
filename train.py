@@ -277,7 +277,7 @@ class TrainModule(L.LightningModule):
             else:
                 self.discrim_batch_count += 1
             self.log(
-                "train/loss/discrim_loss",
+                "train/discrim_loss",
                 disc_loss,
                 on_step=True,
                 on_epoch=False,
@@ -294,7 +294,7 @@ class TrainModule(L.LightningModule):
         # self.train_components["quantizer_loss"].update(output["quantizer_loss"])
         for name, loss in losses.items():
             self.log(
-                f"train/loss/{name}",
+                f"train/{name}",
                 loss,
                 on_step=True,
                 on_epoch=False,
@@ -302,7 +302,7 @@ class TrainModule(L.LightningModule):
                 batch_size=bs,
             )
         self.log(
-            "train/loss/quantizer_loss",
+            "train/quantizer_loss",
             output["quantizer_loss"],
             on_step=True,
             on_epoch=False,
@@ -310,7 +310,7 @@ class TrainModule(L.LightningModule):
             batch_size=bs,
         )
         self.log(
-            "train/lr/gen_lr",
+            "lr/gen_lr",
             g_sch.get_last_lr()[0],
             on_step=True,
             on_epoch=False,
@@ -318,7 +318,7 @@ class TrainModule(L.LightningModule):
             batch_size=bs,
         )
         self.log(
-            "train/lr/disc_lr",
+            "lr/disc_lr",
             d_sch.get_last_lr()[0],
             on_step=True,
             on_epoch=False,
