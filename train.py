@@ -205,6 +205,10 @@ class TrainModule(L.LightningModule):
             waveforms,
             output["decoded"],
         )
+        total_gen_loss = (
+            sum(loss.item() * self.weights[name] for name, loss in losses.items())
+            + self.hparams.quantizer_loss_lambda * output["quantizer_loss"].item()
+        )
         if self.hparams.skip_reconstruction_loss:
             effective_losses = {
                 "feature_loss": losses["feature_loss"],
@@ -280,6 +284,14 @@ class TrainModule(L.LightningModule):
             # move scheduler every N batches
             d_sch.step()
 
+        self.log(
+            "train/total_loss",
+            total_gen_loss,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+            batch_size=bs,
+        )
         for name, loss in losses.items():
             self.log(
                 f"train/{name}",
@@ -329,8 +341,10 @@ class TrainModule(L.LightningModule):
             waveforms,
             output["decoded"],
         )
-        total_gen_loss = sum(loss * self.weights[name] for name, loss in losses.items())
-        total_gen_loss += self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
+        total_gen_loss = (
+            sum(loss * self.weights[name] for name, loss in losses.items())
+            + self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
+        )
 
         self.log(
             "val/total_loss",
