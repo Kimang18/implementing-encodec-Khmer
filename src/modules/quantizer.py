@@ -397,7 +397,7 @@ class ResidualVectorQuantization(nn.Module):
         out_losses = torch.stack(all_losses)
         out_indices = torch.stack(all_indices)
 
-        return quantize_out, out_indices, out_losses
+        return quantize_out, out_indices, torch.mean(out_losses)
 
 
 def test_codebook():
