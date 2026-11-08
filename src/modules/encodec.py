@@ -6,10 +6,8 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
+from .quantizer import ResidualVectorQuantization
 from .seanet import SEANetDecoder, SEANetEncoder
-
-# from .quantizer import ResidualVectorQuantization
-from .standard_rvq import ResidualVectorQuantization
 
 
 @dataclass
@@ -79,10 +77,10 @@ class EnCodecModel(nn.Module):
             dim=self.encoder.dimension,
             codebook_size=config.codebook_size,
             codebook_dim=config.codebook_dim,
-            # decay=config.decay,
-            # kmeans_init=config.kmeans_init,
-            # kmeans_iters=config.kmeans_iters,
-            # threshold_ema_dead_code=config.threshold_ema_dead_code,
+            decay=config.decay,
+            kmeans_init=config.kmeans_init,
+            kmeans_iters=config.kmeans_iters,
+            threshold_ema_dead_code=config.threshold_ema_dead_code,
             commitment_weight=config.commitment_weight,
         )
         self.decoder = SEANetDecoder(
