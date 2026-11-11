@@ -1,3 +1,4 @@
+seed: 3407
 data:
     hf_repo: "Kimang18/compact-DDD-Cambodia-khmer-speech-dataset-v0-2-0"
     segment_length: 16000
@@ -53,7 +54,7 @@ module:
     sample_rate: 16000
     n_mels: 80
     learning_rate: 1e-4
-    disc_update_prob: 0.66
+    disc_update_prob: 0.666
     max_grad_norm: 1.0
     time_loss_lambda: 0.1
     frequency_loss_lambda: 1.0

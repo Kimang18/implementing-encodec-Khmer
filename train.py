@@ -26,17 +26,19 @@ from src.utils import save_audios
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-def make_buffers_non_persistent(module: nn.Module):
-    """Avoid saving MelSpectrogram buffers in checkpoint"""
-    for m in module.modules():
-        m._non_persistent_buffers_set.update(m._buffers.keys())
-
-
 class JupyterNoProgressBar(TQDMProgressBar):
+    """Deactivate progress bar for validation loop"""
+
     def init_validation_tqdm(self):
         bar = super().init_validation_tqdm()
         bar.disable = True  # Turns off the validation progress bar completely
         return bar
+
+
+def make_buffers_non_persistent(module: nn.Module):
+    """Avoid saving MelSpectrogram buffers in checkpoint"""
+    for m in module.modules():
+        m._non_persistent_buffers_set.update(m._buffers.keys())
 
 
 class TrainModule(L.LightningModule):
@@ -113,12 +115,12 @@ class TrainModule(L.LightningModule):
         frequency_loss = 0.0
         for fft in self.ffts:
             input_mel = fft(input_wav)
-            input_mel = torch.log10(torch.clamp(input_mel, min=1e-10))
+            input_mel = torch.log10(torch.clamp(input_mel, min=1e-5))
             output_mel = fft(output_wav)
-            output_mel = torch.log10(torch.clamp(output_mel, min=1e-10))
+            output_mel = torch.log10(torch.clamp(output_mel, min=1e-5))
 
             frequency_loss = (
-                frequency_loss + F.smooth_l1_loss(input_mel, output_mel, beta=0.5)
+                frequency_loss + F.smooth_l1_loss(input_mel, output_mel)
                 # + F.mse_loss(input_mel, output_mel)
             )
         frequency_loss = frequency_loss / len(self.ffts)
@@ -147,16 +149,14 @@ class TrainModule(L.LightningModule):
         else:
             generator_loss = torch.tensor(
                 [0.0],
-                dtype=output_wav.dtype,
-                device=output_wav.device,
                 requires_grad=True,
             )
+            generator_loss.type_as(output_wav)
             feature_loss = torch.tensor(
                 [0.0],
-                dtype=output_wav.dtype,
-                device=output_wav.device,
                 requires_grad=True,
             )
+            feature_loss.type_as(output_wav)
 
         return {
             "time_loss": time_loss,
@@ -216,21 +216,23 @@ class TrainModule(L.LightningModule):
             }
         else:
             effective_losses = losses
-        if not self.hparams.use_balancer:
-            surrogate = (
-                sum(
-                    loss * self.weights[name] for name, loss in effective_losses.items()
-                )
-                + self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
-            )
-        else:
+        if self.hparams.use_balancer:
             out_grad = self.balancer.backward(
                 effective_losses, output["decoded"], retain_graph=True
             )
             surrogate = (
                 output["decoded"] * out_grad.detach()
             ).sum() + self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
+        else:
+            surrogate = (
+                sum(
+                    loss * self.weights[name] for name, loss in effective_losses.items()
+                )
+                + self.hparams.quantizer_loss_lambda * output["quantizer_loss"]
+            )
+
         with self._maybe_no_sync(g_opt_take_step):
+            # scale for N gradient accumulation
             self.manual_backward(surrogate / N)
         if g_opt_take_step:
             # clip gradient norm
@@ -241,12 +243,12 @@ class TrainModule(L.LightningModule):
             )
             g_opt.step()
             g_opt.zero_grad(set_to_none=True)
-            g_sch.step()
         self.untoggle_optimizer(g_opt)
 
         # discriminator step #
         self.toggle_optimizer(d_opt)
-        rand = torch.rand(size=(), device=waveforms.device)
+        rand = torch.rand(size=())
+        rand = rand.type_as(waveforms)
         if dist.is_available() and dist.is_initialized():
             dist.broadcast(rand, src=0)
 
@@ -274,21 +276,17 @@ class TrainModule(L.LightningModule):
             self.log(
                 "train/discrim_loss",
                 disc_loss,
-                on_step=True,
-                on_epoch=False,
-                prog_bar=False,
                 batch_size=bs,
             )
         self.untoggle_optimizer(d_opt)
         if g_opt_take_step:
             # move scheduler every N batches
+            g_sch.step()
             d_sch.step()
 
         self.log(
             "train/total_loss",
             total_gen_loss,
-            on_step=True,
-            on_epoch=False,
             prog_bar=True,
             batch_size=bs,
         )
@@ -296,33 +294,23 @@ class TrainModule(L.LightningModule):
             self.log(
                 f"train/{name}",
                 loss,
-                on_step=True,
-                on_epoch=False,
                 prog_bar=True,
                 batch_size=bs,
             )
         self.log(
             "train/quantizer_loss",
             output["quantizer_loss"],
-            on_step=True,
-            on_epoch=False,
             prog_bar=True,
             batch_size=bs,
         )
         self.log(
             "lr/gen_lr",
             g_sch.get_last_lr()[0],
-            on_step=True,
-            on_epoch=False,
-            prog_bar=False,
             batch_size=bs,
         )
         self.log(
             "lr/disc_lr",
             d_sch.get_last_lr()[0],
-            on_step=True,
-            on_epoch=False,
-            prog_bar=False,
             batch_size=bs,
         )
 
@@ -349,23 +337,17 @@ class TrainModule(L.LightningModule):
         self.log(
             "val/total_loss",
             total_gen_loss,
-            on_step=False,
-            on_epoch=True,
             prog_bar=True,
             batch_size=bs,
         )
         self.log(
             "val/frequency_loss",
             losses["frequency_loss"],
-            on_step=False,
-            on_epoch=True,
             batch_size=bs,
         )
         self.log(
             "val/time_loss",
             losses["time_loss"],
-            on_step=False,
-            on_epoch=True,
             batch_size=bs,
         )
 
@@ -426,9 +408,7 @@ class TrainModule(L.LightningModule):
             lr=self.hparams.learning_rate,
             betas=(0.5, 0.9),
         )
-        optimizer_steps = int(
-            self.trainer.limit_train_batches / self.trainer.accumulate_grad_batches
-        )
+        optimizer_steps = int(self.trainer.estimated_stepping_batches)
         warmup_steps = int(0.05 * optimizer_steps)
         G_scheduler = get_cosine_schedule_with_warmup(
             G_optimizer,
@@ -445,7 +425,7 @@ class TrainModule(L.LightningModule):
 
 @hydra.main(version_base="1.3", config_path="configs", config_name="config")
 def main(cfg: DictConfig):
-    seed_everything(seed=3407, workers=True)
+    seed_everything(seed=cfg.seed, workers=True)
     dm = AudioDataModule(cfg.module.sample_rate, **cfg.data)
 
     encodec_cfg = EnCodecConfig(**cfg.gen)
