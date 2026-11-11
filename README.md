@@ -49,6 +49,8 @@ tensorboard --logdir lightning_logs/
 បើមិនទាន់ទុកចិត្តលើកូដរបស់ខ្ញុំ អ្នកអាចសាកបង្ហាត់ដោយប្រើប្រាស់ Google Colab សិនបាន។
 សូមចុចទីនេះ ដើម្បីបើក notebook គំរូសំរាប់បង្ហាត់។
 
+__Please use this badge to open the notebook__: [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Kimang18/implementing-encodec-khmer/blob/main/Training_Encodec.ipynb)
+
 # To buy me a coffee
 
 បើអ្នកទាំងអស់ចង់ជួយគាំទ្រការងាររបស់ខ្ញុំ អាចធ្វើការបរិច្ចាគតាម QR Code ខាងក្រោមនេះបាន។ សូមអរគុណ
